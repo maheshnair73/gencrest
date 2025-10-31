@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Page</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 40px;
+            background: #f0f0f0;
+        }
+        .status {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 10px 0;
+        }
+        .success { color: green; }
+        .error { color: red; }
+    </style>
+</head>
+<body>
+    <h1>Vite Server Test</h1>
+    <div class="status">
+        <h2>Status: <span class="success">✓ HTML Loading</span></h2>
+        <p>If you can see this, the dev server is serving HTML correctly.</p>
+    </div>
+
+    <div class="status">
+        <h2>JavaScript Test:</h2>
+        <div id="js-test" class="error">✗ JavaScript not working</div>
+    </div>
+
+    <div class="status">
+        <h2>React Test:</h2>
+        <div id="react-test" class="error">✗ React not loading</div>
+    </div>
+
+    <script>
+        document.getElementById('js-test').innerHTML = '<span class="success">✓ JavaScript working</span>';
+        document.getElementById('js-test').className = 'success';
+    </script>
+
+    <script type="module">
+        console.log('Module script loading...');
+        document.getElementById('react-test').innerHTML = '<span class="success">✓ Module scripts working</span>';
+        document.getElementById('react-test').className = 'success';
+    </script>
+</body>
+</html>

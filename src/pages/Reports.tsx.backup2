@@ -1,0 +1,1964 @@
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import { useAuth } from '../contexts/AuthContext';
+import { Download, Share2, Calendar, Filter, ChevronDown, ChevronUp, X, Store, User, Search, Package, Play, RefreshCw } from 'lucide-react';
+import { supabase } from '../lib/supabase';
+import Select from 'react-select';
+import { ZONE_LIST, STATE_LIST } from '../constants/geography';
+
+interface OutletTransaction {
+  id: string;
+  outlet_id: string;
+  outlet_code: string;
+  outlet_name: string;
+  owner_name: string;
+  transaction_date: string;
+  opening_stock: number;
+  opening_stock_units?: number;
+  purchases: number;
+  sales: number;
+  sales_units?: number;
+  liquidation: number;
+  liquidation_units?: number;
+  balance_stock: number;
+  balance_stock_units?: number;
+  updated_at: string;
+}
+
+interface MDOSummary {
+  mdo_id: string;
+  mdo_name: string;
+  zone: string;
+  region: string;
+  territory: string;
+  state?: string;
+  opening_stock: number;
+  ytd_sales: number;
+  liquidation: number;
+  balance_stock: number;
+  outlet_count: number;
+  updated_at: string;
+  outlets: OutletTransaction[];
+}
+
+interface ColumnConfig {
+  key: string;
+  label: string;
+  visible: boolean;
+}
+
+interface ProductSKUData {
+  product_code: string;
+  product_name: string;
+  sku_code: string;
+  sku_name: string;
+  opening_stock: number;
+  opening_stock_units: number;
+  ytd_sales: number;
+  ytd_sales_units: number;
+  balance_stock: number;
+  balance_stock_units: number;
+  unit: string;
+}
+
+const Reports: React.FC = () => {
+  const { user } = useAuth();
+  const [dateFrom, setDateFrom] = useState('2025-04-01');
+  const [dateTo, setDateTo] = useState('2025-10-15');
+  const [showDateFilter, setShowDateFilter] = useState(false);
+  const [showColumnFilter, setShowColumnFilter] = useState(false);
+  const [expandedMDOs, setExpandedMDOs] = useState<Set<string>>(new Set());
+  const isRMMOrAbove = ['RMM', 'RBH', 'ZBH', 'VP', 'CFO', 'CHRO', 'MH', 'MD'].includes(user?.role || '');
+  const [viewMode, setViewMode] = useState<'mdo' | 'outlet' | 'product'>('product');
+  const [loading, setLoading] = useState(true);
+  const [mdoData, setMdoData] = useState<MDOSummary[]>([]);
+  const [productData, setProductData] = useState<ProductSKUData[]>([]);
+  const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedZone, setSelectedZone] = useState<string>('all');
+  const [productFilter, setProductFilter] = useState('');
+  const [skuFilter, setSkuFilter] = useState('');
+  const [outletFilter, setOutletFilter] = useState('');
+  const [zoneFilter, setZoneFilter] = useState('');
+  const [regionFilter, setRegionFilter] = useState('');
+  const [territoryFilter, setTerritoryFilter] = useState('');
+  const [showTableFilters, setShowTableFilters] = useState(false);
+  const [selectedRegion, setSelectedRegion] = useState<string>('all');
+  const [selectedTerritory, setSelectedTerritory] = useState<string>('all');
+  const [selectedCategory, setSelectedCategory] = useState<string>('all');
+  const [selectedProduct, setSelectedProduct] = useState<string>('all');
+
+  const [selectedZones, setSelectedZones] = useState<string[]>([]);
+  const [selectedRegions, setSelectedRegions] = useState<string[]>([]);
+  const [selectedStates, setSelectedStates] = useState<string[]>([]);
+  const [selectedTerritories, setSelectedTerritories] = useState<string[]>([]);
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [selectedProducts, setSelectedProducts] = useState<string[]>([]);
+  const [selectedOutlets, setSelectedOutlets] = useState<string[]>([]);
+  const [selectedDistributors, setSelectedDistributors] = useState<string[]>([]);
+  const [reportGenerated, setReportGenerated] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
+
+  const [columns, setColumns] = useState<ColumnConfig[]>([
+    { key: 'name', label: viewMode === 'mdo' ? 'MDO Name' : 'Outlet Name', visible: true },
+    { key: 'zone', label: 'Zone', visible: true },
+    { key: 'region', label: 'Region', visible: true },
+    { key: 'territory', label: 'Territory', visible: true },
+    { key: 'openingStock', label: 'Opening Stock (Value)', visible: true },
+    { key: 'openingStockUnits', label: 'Opening Stock (Units)', visible: true },
+    { key: 'ytdSales', label: 'YTD Sales (Value)', visible: true },
+    { key: 'ytdSalesUnits', label: 'YTD Sales (Units)', visible: true },
+    { key: 'liquidation', label: 'Liquidation (Value)', visible: true },
+    { key: 'liquidationUnits', label: 'Liquidation (Units)', visible: true },
+    { key: 'balanceStock', label: 'Balance Stock (Value)', visible: true },
+    { key: 'balanceStockUnits', label: 'Balance Stock (Units)', visible: true },
+    { key: 'lastUpdated', label: 'Last Updated', visible: true }
+  ]);
+
+  const fetchProductData = useCallback(async () => {
+    if (!user) return;
+
+    setLoading(true);
+    try {
+      let query = supabase
+        .from('distributor_inventory')
+        .select('product_code, product_name, sku_code, sku_name, opening_value, opening_stock, ytd_sales_value, ytd_sales, balance_value, balance_stock, unit, period_start, period_end')
+        .gte('period_start', dateFrom)
+        .lte('period_end', dateTo);
+
+      const { data, error } = await query;
+
+      if (error) throw error;
+
+      const productSKUData: ProductSKUData[] = (data || []).map(item => ({
+        product_code: item.product_code,
+        product_name: item.product_name,
+        sku_code: item.sku_code,
+        sku_name: item.sku_name,
+        opening_stock: Number(item.opening_value) || 0,
+        opening_stock_units: Number(item.opening_stock) || 0,
+        ytd_sales: Number(item.ytd_sales_value) || 0,
+        ytd_sales_units: Number(item.ytd_sales) || 0,
+        balance_stock: Number(item.balance_value) || 0,
+        balance_stock_units: Number(item.balance_stock) || 0,
+        unit: item.unit || 'kg'
+      }));
+
+      setProductData(productSKUData);
+      setLastRefresh(new Date());
+    } catch (error) {
+      console.error('Error fetching product data:', error);
+      setProductData([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [user, dateFrom, dateTo]);
+
+  const fetchReportData = useCallback(async () => {
+    if (!user) return;
+
+    setLoading(true);
+    try {
+      console.log('Fetching reports for user:', user.role, user.employeeCode);
+
+      let mdoQuery = supabase
+        .from('mdo_summary')
+        .select('*')
+        .gte('period_start', dateFrom)
+        .lte('period_end', dateTo);
+
+      if (user.role === 'TSM') {
+        console.log('Filtering by TSM:', user.employeeCode);
+        mdoQuery = mdoQuery.eq('tsm_id', user.employeeCode);
+      } else if (user.role === 'RBH') {
+        console.log('Filtering by RBH:', user.employeeCode);
+        mdoQuery = mdoQuery.eq('rbh_id', user.employeeCode);
+      } else if (user.role === 'ZBH') {
+        console.log('Filtering by ZBH:', user.employeeCode);
+        mdoQuery = mdoQuery.eq('zbh_id', user.employeeCode);
+      } else if (user.role === 'MDO') {
+        console.log('Filtering by MDO:', user.employeeCode);
+        mdoQuery = mdoQuery.eq('mdo_id', user.employeeCode);
+      }
+
+      const { data: summaries, error: summaryError } = await mdoQuery;
+
+      console.log('MDO Summaries received:', summaries?.length || 0, summaries);
+
+      if (summaryError) {
+        console.error('Error fetching summaries:', summaryError);
+        throw summaryError;
+      }
+
+      if (summaries && summaries.length > 0) {
+        const mdoIds = summaries.map(s => s.mdo_id);
+
+        let outletQuery = supabase
+          .from('outlet_transactions')
+          .select(`
+            *,
+            outlets:outlet_id (
+              outlet_code,
+              outlet_name,
+              owner_name,
+              zone,
+              region,
+              territory,
+              state
+            )
+          `)
+          .in('mdo_id', mdoIds);
+
+        const { data: transactions, error: transError } = await outletQuery;
+
+        console.log('Outlet transactions received:', transactions?.length || 0);
+
+        if (transError) {
+          console.error('Error fetching transactions:', transError);
+          throw transError;
+        }
+
+        const enrichedData: MDOSummary[] = summaries.map(summary => {
+          const mdoOutlets = (transactions || [])
+            .filter(t => t.mdo_id === summary.mdo_id)
+            .map(t => ({
+              id: t.id,
+              outlet_id: t.outlet_id,
+              outlet_code: t.outlets?.outlet_code || '',
+              outlet_name: t.outlets?.outlet_name || '',
+              owner_name: t.outlets?.owner_name || '',
+              transaction_date: t.transaction_date,
+              opening_stock: parseFloat(t.opening_stock || 0),
+              purchases: parseFloat(t.purchases || 0),
+              sales: parseFloat(t.sales || 0),
+              liquidation: parseFloat(t.liquidation || 0),
+              balance_stock: parseFloat(t.balance_stock || 0),
+              updated_at: t.updated_at
+            }));
+
+          // Get state from the first outlet's data
+          const firstOutlet = (transactions || []).find(t => t.mdo_id === summary.mdo_id);
+          const state = firstOutlet?.outlets?.state;
+
+          return {
+            mdo_id: summary.mdo_id,
+            mdo_name: summary.mdo_name,
+            zone: summary.zone,
+            region: summary.region,
+            territory: summary.territory,
+            state: state,
+            opening_stock: parseFloat(summary.opening_stock || 0),
+            ytd_sales: parseFloat(summary.ytd_sales || 0),
+            liquidation: parseFloat(summary.liquidation || 0),
+            balance_stock: parseFloat(summary.balance_stock || 0),
+            outlet_count: summary.outlet_count,
+            updated_at: summary.updated_at,
+            outlets: mdoOutlets
+          };
+        });
+
+        console.log('Enriched data:', enrichedData);
+        setMdoData(enrichedData);
+      } else {
+        console.log('No summaries found');
+        setMdoData([]);
+      }
+
+      setLastRefresh(new Date());
+    } catch (error) {
+      console.error('Error fetching report data:', error);
+      setMdoData([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [user, dateFrom, dateTo]);
+
+  useEffect(() => {
+    if (viewMode === 'product') {
+      fetchProductData();
+    } else {
+      fetchReportData();
+    }
+  }, [viewMode, fetchReportData, fetchProductData]);
+
+  useEffect(() => {
+    setColumns(prev => prev.map(col =>
+      col.key === 'name'
+        ? { ...col, label: viewMode === 'mdo' ? 'MDO Name' : 'Outlet Name' }
+        : col
+    ));
+  }, [viewMode]);
+
+  const uniqueZones = useMemo(() => {
+    const zones = new Set(mdoData.map(mdo => mdo.zone).filter(Boolean));
+    const zonesArray = Array.from(zones).sort();
+    console.log('Unique zones for RBH:', zonesArray, 'mdoData count:', mdoData.length);
+    return zonesArray;
+  }, [mdoData]);
+
+  const uniqueRegions = useMemo(() => {
+    let filteredData = mdoData;
+    if (selectedZones.length > 0) {
+      filteredData = filteredData.filter(mdo => selectedZones.includes(mdo.zone));
+    }
+    const regions = new Set(filteredData.map(mdo => mdo.region).filter(Boolean));
+    return Array.from(regions).sort();
+  }, [mdoData, selectedZones]);
+
+  const uniqueStates = useMemo(() => {
+    let filteredData = mdoData;
+    if (selectedZones.length > 0) {
+      filteredData = filteredData.filter(mdo => selectedZones.includes(mdo.zone));
+    }
+    if (selectedRegions.length > 0) {
+      filteredData = filteredData.filter(mdo => selectedRegions.includes(mdo.region));
+    }
+    const states = new Set(filteredData.map(mdo => mdo.state).filter(Boolean));
+    const statesArray = Array.from(states).sort();
+    console.log('Unique states for RBH:', statesArray, 'filtered mdoData count:', filteredData.length);
+    return statesArray;
+  }, [mdoData, selectedZones, selectedRegions]);
+
+  const uniqueTerritories = useMemo(() => {
+    let filteredData = mdoData;
+    if (selectedZones.length > 0) {
+      filteredData = filteredData.filter(mdo => selectedZones.includes(mdo.zone));
+    }
+    if (selectedRegions.length > 0) {
+      filteredData = filteredData.filter(mdo => selectedRegions.includes(mdo.region));
+    }
+    if (selectedStates.length > 0) {
+      filteredData = filteredData.filter(mdo => mdo.state && selectedStates.includes(mdo.state));
+    }
+    const territories = new Set(filteredData.map(mdo => mdo.territory).filter(Boolean));
+    return Array.from(territories).sort();
+  }, [mdoData, selectedZones, selectedRegions, selectedStates]);
+
+  const productCategories = ['all', 'Fertilizers', 'Pesticides', 'Seeds'];
+  const productList = [
+    'all',
+    'DAP (Di-Ammonium Phosphate)',
+    'Urea',
+    'NPK Complex',
+    'MOP (Muriate of Potash)',
+    'SSP (Single Super Phosphate)',
+    'Insecticide',
+    'Herbicide',
+    'Fungicide',
+    'Hybrid Seeds',
+    'Micronutrients'
+  ];
+
+  const handleGenerateReport = useCallback(() => {
+    if (viewMode === 'product') {
+      fetchProductData();
+    } else {
+      fetchReportData();
+    }
+    setReportGenerated(true);
+  }, [viewMode, fetchProductData, fetchReportData]);
+
+  const hasFiltersSelected = useMemo(() => {
+    return selectedZones.length > 0 ||
+           selectedRegions.length > 0 ||
+           selectedStates.length > 0 ||
+           selectedTerritories.length > 0 ||
+           selectedCategories.length > 0 ||
+           selectedProducts.length > 0 ||
+           selectedOutlets.length > 0 ||
+           selectedDistributors.length > 0;
+  }, [selectedZones, selectedRegions, selectedStates, selectedTerritories, selectedCategories, selectedProducts, selectedOutlets, selectedDistributors]);
+
+  const filteredMdoData = useMemo(() => {
+    let filtered = mdoData;
+
+    // Multi-select zone filter
+    if (selectedZones.length > 0) {
+      filtered = filtered.filter(mdo => selectedZones.includes(mdo.zone));
+    }
+
+    // Multi-select region filter
+    if (selectedRegions.length > 0) {
+      filtered = filtered.filter(mdo => selectedRegions.includes(mdo.region));
+    }
+
+    // Multi-select state filter
+    if (selectedStates.length > 0) {
+      filtered = filtered.filter(mdo => mdo.state && selectedStates.includes(mdo.state));
+    }
+
+    // Multi-select territory filter
+    if (selectedTerritories.length > 0) {
+      filtered = filtered.filter(mdo => selectedTerritories.includes(mdo.territory));
+    }
+
+    // Multi-select distributor filter
+    if (selectedDistributors.length > 0) {
+      filtered = filtered.filter(mdo =>
+        selectedDistributors.includes(mdo.mdo_id) ||
+        selectedDistributors.includes(mdo.mdo_name)
+      );
+    }
+
+    // Multi-select outlet filter
+    if (selectedOutlets.length > 0) {
+      filtered = filtered.map(mdo => ({
+        ...mdo,
+        outlets: mdo.outlets.filter(outlet =>
+          selectedOutlets.includes(outlet.outlet_id) ||
+          selectedOutlets.includes(outlet.outlet_name)
+        )
+      })).filter(mdo => mdo.outlets.length > 0);
+    }
+
+    // Apply search query
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      filtered = filtered.filter(mdo =>
+        mdo.mdo_name.toLowerCase().includes(query) ||
+        mdo.mdo_id.toLowerCase().includes(query) ||
+        mdo.tsm_name.toLowerCase().includes(query) ||
+        mdo.territory.toLowerCase().includes(query) ||
+        mdo.region.toLowerCase().includes(query)
+      );
+    }
+
+    return filtered;
+  }, [mdoData, searchQuery, selectedZones, selectedRegions, selectedStates, selectedTerritories, selectedDistributors, selectedOutlets]);
+
+  const hierarchicalData = useMemo(() => {
+    const hierarchy = new Map<string, Map<string, { tsmId: string; tsmName: string; mdos: MDOSummary[] }>>();
+
+    filteredMdoData.forEach(item => {
+      const zone = item.zone;
+      const tsmId = item.tsm_id;
+      const tsmName = item.tsm_name;
+
+      if (!hierarchy.has(zone)) {
+        hierarchy.set(zone, new Map());
+      }
+
+      const zoneMap = hierarchy.get(zone)!;
+      if (!zoneMap.has(tsmId)) {
+        zoneMap.set(tsmId, { tsmId, tsmName, mdos: [] });
+      }
+
+      zoneMap.get(tsmId)!.mdos.push(item);
+    });
+
+    console.log('Hierarchical data:', Array.from(hierarchy.entries()));
+    return hierarchy;
+  }, [filteredMdoData]);
+
+  const groupedData = useMemo(() => {
+    const groups = new Map<string, MDOSummary[]>();
+    filteredMdoData.forEach(item => {
+      const key = item.zone;
+      if (!groups.has(key)) {
+        groups.set(key, []);
+      }
+      groups.get(key)!.push(item);
+    });
+    console.log('Grouped data by zone:', Array.from(groups.entries()));
+    return groups;
+  }, [filteredMdoData]);
+
+  const filteredProductData = useMemo(() => {
+    return productData.filter(item => {
+      // Multi-select product filter
+      if (selectedProducts.length > 0) {
+        const productMatch = selectedProducts.some(p =>
+          item.product_name.toLowerCase().includes(p.toLowerCase()) ||
+          item.sku_name.toLowerCase().includes(p.toLowerCase())
+        );
+        if (!productMatch) return false;
+      }
+
+      // Multi-select category filter (if needed)
+      if (selectedCategories.length > 0) {
+        // This would require category data in ProductSKUData
+        // For now, we'll skip this until we have category field
+      }
+
+      // Old text filters (keep for backwards compatibility)
+      const matchesProduct = !productFilter ||
+        item.product_name.toLowerCase().includes(productFilter.toLowerCase());
+      const matchesSKU = !skuFilter ||
+        item.sku_name.toLowerCase().includes(skuFilter.toLowerCase());
+
+      return matchesProduct && matchesSKU;
+    });
+  }, [productData, productFilter, skuFilter, selectedProducts, selectedCategories]);
+
+  const filteredOutletData = useMemo(() => {
+    return mdoData.map(mdo => {
+      const matchesZone = !zoneFilter || mdo.zone.toLowerCase().includes(zoneFilter.toLowerCase());
+      const matchesRegion = !regionFilter || mdo.region.toLowerCase().includes(regionFilter.toLowerCase());
+      const matchesTerritory = !territoryFilter || mdo.territory.toLowerCase().includes(territoryFilter.toLowerCase());
+
+      if (!matchesZone && !matchesRegion && !matchesTerritory && !outletFilter) {
+        return { ...mdo, outlets: mdo.outlets };
+      }
+
+      if (!matchesZone || !matchesRegion || !matchesTerritory) {
+        return { ...mdo, outlets: [] };
+      }
+
+      return {
+        ...mdo,
+        outlets: mdo.outlets.filter(outlet =>
+          !outletFilter || outlet.outlet_name.toLowerCase().includes(outletFilter.toLowerCase())
+        )
+      };
+    }).filter(mdo => mdo.outlets.length > 0);
+  }, [mdoData, outletFilter, zoneFilter, regionFilter, territoryFilter]);
+
+  const totals = useMemo(() => {
+    if (viewMode === 'product') {
+      return filteredProductData.reduce((acc, item) => ({
+        openingStock: acc.openingStock + item.opening_stock,
+        openingStockUnits: acc.openingStockUnits + item.opening_stock_units,
+        ytdSales: acc.ytdSales + item.ytd_sales,
+        ytdSalesUnits: acc.ytdSalesUnits + item.ytd_sales_units,
+        liquidation: acc.liquidation + (item.ytd_sales),
+        liquidationUnits: acc.liquidationUnits + item.ytd_sales_units,
+        balanceStock: acc.balanceStock + item.balance_stock,
+        balanceStockUnits: acc.balanceStockUnits + item.balance_stock_units
+      }), { openingStock: 0, openingStockUnits: 0, ytdSales: 0, ytdSalesUnits: 0, liquidation: 0, liquidationUnits: 0, balanceStock: 0, balanceStockUnits: 0 });
+    }
+    return filteredMdoData.reduce((acc, mdo) => {
+      return mdo.outlets.reduce((outletAcc, outlet) => ({
+        openingStock: outletAcc.openingStock + outlet.opening_stock,
+        openingStockUnits: outletAcc.openingStockUnits + (outlet.opening_stock_units || 0),
+        ytdSales: outletAcc.ytdSales + outlet.sales,
+        ytdSalesUnits: outletAcc.ytdSalesUnits + (outlet.sales_units || 0),
+        liquidation: outletAcc.liquidation + outlet.liquidation,
+        liquidationUnits: outletAcc.liquidationUnits + (outlet.liquidation_units || 0),
+        balanceStock: outletAcc.balanceStock + outlet.balance_stock,
+        balanceStockUnits: outletAcc.balanceStockUnits + (outlet.balance_stock_units || 0)
+      }), acc);
+    }, { openingStock: 0, openingStockUnits: 0, ytdSales: 0, ytdSalesUnits: 0, liquidation: 0, liquidationUnits: 0, balanceStock: 0, balanceStockUnits: 0 });
+  }, [filteredMdoData, filteredProductData, viewMode]);
+
+  const hasActiveTableFilters = productFilter || skuFilter || outletFilter || zoneFilter || regionFilter || territoryFilter;
+
+  const clearTableFilters = () => {
+    setProductFilter('');
+    setSkuFilter('');
+    setOutletFilter('');
+    setZoneFilter('');
+    setRegionFilter('');
+    setTerritoryFilter('');
+  };
+
+  const toggleColumn = (key: string) => {
+    setColumns(prev => prev.map(col =>
+      col.key === key ? { ...col, visible: !col.visible } : col
+    ));
+  };
+
+  const toggleZone = (zone: string) => {
+    setExpandedMDOs(prev => {
+      const next = new Set(prev);
+      if (next.has(zone)) {
+        next.delete(zone);
+      } else {
+        next.add(zone);
+      }
+      return next;
+    });
+  };
+
+  const toggleTSM = (zone: string, tsmId: string) => {
+    setExpandedMDOs(prev => {
+      const next = new Set(prev);
+      const key = `tsm_${zone}_${tsmId}`;
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
+  const clearAllFilters = () => {
+    setSearchQuery('');
+    setSelectedZone('all');
+    setSelectedRegion('all');
+    setSelectedTerritory('all');
+    setSelectedCategory('all');
+    setSelectedProduct('all');
+    setSelectedZones([]);
+    setSelectedRegions([]);
+    setSelectedStates([]);
+    setSelectedTerritories([]);
+    setSelectedCategories([]);
+    setSelectedProducts([]);
+    setSelectedDistributors([]);
+    setSelectedOutlets([]);
+    setReportGenerated(false);
+  };
+
+  const hasActiveFilters = searchQuery || selectedZone !== 'all' || selectedRegion !== 'all' || selectedTerritory !== 'all' || selectedCategory !== 'all' || selectedProduct !== 'all' || hasFiltersSelected;
+
+  const zoneOptions = useMemo(() => {
+    if (uniqueZones.length > 0) {
+      return uniqueZones.map(zone => ({ value: zone, label: zone }));
+    }
+    return ZONE_LIST;
+  }, [uniqueZones]);
+
+  const regionOptions = useMemo(() =>
+    uniqueRegions.map(region => ({ value: region, label: region })),
+    [uniqueRegions]
+  );
+
+  const stateOptions = useMemo(() => {
+    if (uniqueStates.length > 0) {
+      return uniqueStates.map(state => ({ value: state, label: state }));
+    }
+    return STATE_LIST;
+  }, [uniqueStates]);
+
+  const territoryOptions = useMemo(() =>
+    uniqueTerritories.map(territory => ({ value: territory, label: territory })),
+    [uniqueTerritories]
+  );
+
+  const productOptions = useMemo(() =>
+    productList.filter(p => p !== 'all').map(product => ({ value: product, label: product })),
+    []
+  );
+
+  const distributorOptions = useMemo(() => {
+    const distributors = new Map<string, { name: string; code: string; zone: string; region: string; state?: string; territory: string }>();
+
+    mdoData.forEach(mdo => {
+      // Filter MDOs based on selected zones/regions/states/territories
+      const matchesZone = selectedZones.length === 0 || selectedZones.includes(mdo.zone);
+      const matchesRegion = selectedRegions.length === 0 || selectedRegions.includes(mdo.region);
+      const matchesState = selectedStates.length === 0 || (mdo.state && selectedStates.includes(mdo.state));
+      const matchesTerritory = selectedTerritories.length === 0 || selectedTerritories.includes(mdo.territory);
+
+      if (matchesZone && matchesRegion && matchesState && matchesTerritory) {
+        if (!distributors.has(mdo.mdo_id)) {
+          distributors.set(mdo.mdo_id, {
+            name: mdo.mdo_name,
+            code: mdo.mdo_id,
+            zone: mdo.zone,
+            region: mdo.region,
+            state: mdo.state,
+            territory: mdo.territory
+          });
+        }
+      }
+    });
+
+    return Array.from(distributors.values())
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map(dist => ({
+        value: dist.code,
+        label: `${dist.name} (${dist.code})`
+      }));
+  }, [mdoData, selectedZones, selectedRegions, selectedStates, selectedTerritories]);
+
+  const outletOptions = useMemo(() => {
+    const outlets = new Map<string, { name: string; zone: string; region: string; state?: string; territory: string }>();
+
+    mdoData.forEach(mdo => {
+      // Filter MDOs based on selected zones/regions/states/territories
+      const matchesZone = selectedZones.length === 0 || selectedZones.includes(mdo.zone);
+      const matchesRegion = selectedRegions.length === 0 || selectedRegions.includes(mdo.region);
+      const matchesState = selectedStates.length === 0 || (mdo.state && selectedStates.includes(mdo.state));
+      const matchesTerritory = selectedTerritories.length === 0 || selectedTerritories.includes(mdo.territory);
+
+      if (matchesZone && matchesRegion && matchesState && matchesTerritory) {
+        mdo.outlets.forEach(outlet => {
+          if (!outlets.has(outlet.outlet_id)) {
+            outlets.set(outlet.outlet_id, {
+              name: outlet.outlet_name,
+              zone: mdo.zone,
+              region: mdo.region,
+              state: mdo.state,
+              territory: mdo.territory
+            });
+          }
+        });
+      }
+    });
+
+    return Array.from(outlets.values())
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map(outlet => ({
+        value: outlet.name,
+        label: `${outlet.name} (${outlet.zone} - ${outlet.region}${outlet.state ? ' - ' + outlet.state : ''})`,
+      }));
+  }, [mdoData, selectedZones, selectedRegions, selectedStates, selectedTerritories]);
+
+  const toggleMDO = (mdoId: string) => {
+    setExpandedMDOs(prev => {
+      const next = new Set(prev);
+      const key = `mdo_${mdoId}`;
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
+  const downloadExcel = () => {
+    const visibleColumns = columns.filter(col => col.visible);
+    const headers = visibleColumns.map(col => col.label).join(',');
+
+    let rows = '';
+    if (viewMode === 'mdo') {
+      rows = mdoData.map(row =>
+        visibleColumns.map(col => {
+          switch(col.key) {
+            case 'name': return `"${row.mdo_name}"`;
+            case 'zone': return `"${row.zone}"`;
+            case 'region': return `"${row.region}"`;
+            case 'territory': return `"${row.territory}"`;
+            case 'openingStock': return row.opening_stock;
+            case 'ytdSales': return row.ytd_sales;
+            case 'liquidation': return row.liquidation;
+            case 'balanceStock': return row.balance_stock;
+            case 'lastUpdated': return `"${new Date(row.updated_at).toLocaleDateString('en-IN')}"`;
+            default: return '';
+          }
+        }).join(',')
+      ).join('\n');
+    } else {
+      const allOutlets = mdoData.flatMap(mdo =>
+        mdo.outlets.map(outlet => ({ ...outlet, mdo_name: mdo.mdo_name, zone: mdo.zone, region: mdo.region, territory: mdo.territory }))
+      );
+      rows = allOutlets.map(row =>
+        visibleColumns.map(col => {
+          switch(col.key) {
+            case 'name': return `"${row.outlet_name}"`;
+            case 'zone': return `"${row.zone}"`;
+            case 'region': return `"${row.region}"`;
+            case 'territory': return `"${row.territory}"`;
+            case 'openingStock': return row.opening_stock;
+            case 'ytdSales': return row.sales;
+            case 'liquidation': return row.liquidation;
+            case 'balanceStock': return row.balance_stock;
+            case 'lastUpdated': return `"${new Date(row.updated_at).toLocaleDateString('en-IN')}"`;
+            default: return '';
+          }
+        }).join(',')
+      ).join('\n');
+    }
+
+    const csv = `${headers}\n${rows}`;
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `liquidation-report-${viewMode}-${dateFrom}-to-${dateTo}.csv`;
+    a.click();
+    window.URL.revokeObjectURL(url);
+  };
+
+  const shareViaWhatsApp = () => {
+    const message = encodeURIComponent(`*Liquidation Report (${viewMode.toUpperCase()})*\n${dateFrom} to ${dateTo}\n\nTotal Opening Stock: ₹${(totals.openingStock / 100000).toFixed(2)}L\nTotal YTD Sales: ₹${(totals.ytdSales / 100000).toFixed(2)}L\nTotal Liquidation: ₹${(totals.liquidation / 100000).toFixed(2)}L\nTotal Balance Stock: ₹${(totals.balanceStock / 100000).toFixed(2)}L\n\nLast Updated: ${lastRefresh.toLocaleString('en-IN')}`);
+    window.open(`https://wa.me/?text=${message}`, '_blank');
+  };
+
+  const formatValue = (value: any, key: string) => {
+    if (key === 'lastUpdated' && value) {
+      return new Date(value).toLocaleString('en-IN', {
+        dateStyle: 'short',
+        timeStyle: 'short'
+      });
+    }
+    if (typeof value === 'number') {
+      return `₹${(value / 100000).toFixed(2)}L`;
+    }
+    return value;
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <div className="text-center">
+          <RefreshCw className="w-8 h-8 animate-spin text-blue-600 mx-auto mb-4" />
+          <p className="text-gray-600">Loading reports...</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="-mx-4 sm:-mx-6 lg:-mx-8 px-3 pt-1 pb-3 sm:px-4 lg:px-6">
+      <div className="mb-2 sm:mb-3">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1.5">
+          <div className="flex-1 min-w-0">
+            <h1 className="text-lg sm:text-xl lg:text-2xl font-bold text-gray-900 mb-1 truncate">Liquidation Reports</h1>
+            <p className="text-xs sm:text-sm text-gray-600 truncate">
+              {user?.role === 'TSM' && `Territory: ${user?.territory} | Zone: ${user?.zone}`}
+              {user?.role === 'ZBH' && `Zone: ${user?.zone}`}
+              {user?.role === 'MDO' && `MDO: ${user?.name}`}
+            </p>
+          </div>
+          <div className="text-left sm:text-right flex-shrink-0">
+            <p className="text-xs text-gray-500">Last Updated</p>
+            <p className="text-xs sm:text-sm font-medium text-gray-900">{lastRefresh.toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' })}</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-3 sm:p-4 mb-3">
+        <div className="flex items-center justify-between gap-2 pb-2">
+          <div className="flex gap-1.5">
+            <button
+              onClick={() => setViewMode('product')}
+              className={`flex items-center gap-1 px-2.5 py-1.5 sm:px-4 sm:py-2 rounded-lg transition-colors text-xs sm:text-sm font-medium whitespace-nowrap ${
+                viewMode === 'product'
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-50'
+              }`}
+            >
+              <Package className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+              <span>Product</span>
+            </button>
+            <button
+              onClick={() => setViewMode('outlet')}
+              className={`flex items-center gap-1 px-2.5 py-1.5 sm:px-4 sm:py-2 rounded-lg transition-colors text-xs sm:text-sm font-medium whitespace-nowrap ${
+                viewMode === 'outlet'
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-50'
+              }`}
+            >
+              <Store className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+              <span>Customer</span>
+            </button>
+          </div>
+
+          <button
+            onClick={() => setShowFilters(!showFilters)}
+            className="flex items-center gap-1 px-2.5 py-1.5 sm:px-4 sm:py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors text-xs sm:text-sm font-medium whitespace-nowrap"
+          >
+            <Filter className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+            <span className="hidden sm:inline">{showFilters ? 'Hide' : 'Show'} Filters</span>
+            <span className="sm:hidden">Filters</span>
+            {showFilters ? <ChevronUp className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> : <ChevronDown className="w-3.5 h-3.5 sm:w-4 sm:h-4" />}
+          </button>
+        </div>
+
+        {showFilters && (
+          <>
+            {(viewMode === 'mdo' || viewMode === 'outlet') && (
+          <div className="space-y-3 mt-4 pt-4 border-t border-gray-200">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+              {/* MDO & TSM: Territory + Search Customer */}
+              {(user?.role === 'MDO' || user?.role === 'TSM') && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Territory</label>
+                    <Select
+                      isMulti
+                      options={territoryOptions}
+                      value={territoryOptions.filter(opt => selectedTerritories.includes(opt.value))}
+                      onChange={(selected) => setSelectedTerritories(selected?.map(s => s.value) || [])}
+                      placeholder="Select territories..."
+                      className="text-sm"
+                      classNamePrefix="select"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Search Customer</label>
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+                      <input
+                        type="text"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        placeholder="Search by customer name..."
+                        className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* RMM: Territory + Region + Customer */}
+              {user?.role === 'RMM' && (
+                <>
+                  {uniqueTerritories.length > 0 && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Territories</label>
+                      <Select
+                        isMulti
+                        options={territoryOptions}
+                        value={territoryOptions.filter(opt => selectedTerritories.includes(opt.value))}
+                        onChange={(selected) => setSelectedTerritories(selected?.map(s => s.value) || [])}
+                        placeholder="Select territories..."
+                        className="text-sm"
+                        classNamePrefix="select"
+                      />
+                    </div>
+                  )}
+                  {uniqueRegions.length > 0 && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Regions</label>
+                      <Select
+                        isMulti
+                        options={regionOptions}
+                        value={regionOptions.filter(opt => selectedRegions.includes(opt.value))}
+                        onChange={(selected) => setSelectedRegions(selected?.map(s => s.value) || [])}
+                        placeholder="Select regions..."
+                        className="text-sm"
+                        classNamePrefix="select"
+                      />
+                    </div>
+                  )}
+                  {outletOptions.length > 0 && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Customers</label>
+                      <Select
+                        isMulti
+                        options={outletOptions}
+                        value={outletOptions.filter(opt => selectedOutlets.includes(opt.value))}
+                        onChange={(selected) => setSelectedOutlets(selected?.map(s => s.value) || [])}
+                        placeholder="Select customers..."
+                        className="text-sm"
+                        classNamePrefix="select"
+                      />
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* RBH: Region + State + Territory + Search Customer */}
+              {user?.role === 'RBH' && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Region</label>
+                    <Select
+                      isMulti
+                      options={regionOptions}
+                      value={regionOptions.filter(opt => selectedRegions.includes(opt.value))}
+                      onChange={(selected) => setSelectedRegions(selected?.map(s => s.value) || [])}
+                      placeholder="Select regions..."
+                      className="text-sm"
+                      classNamePrefix="select"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">State</label>
+                    <Select
+                      isMulti
+                      options={stateOptions}
+                      value={stateOptions.filter(opt => selectedStates.includes(opt.value))}
+                      onChange={(selected) => setSelectedStates(selected?.map(s => s.value) || [])}
+                      placeholder="Select states..."
+                      className="text-sm"
+                      classNamePrefix="select"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Territory</label>
+                    <Select
+                      isMulti
+                      options={territoryOptions}
+                      value={territoryOptions.filter(opt => selectedTerritories.includes(opt.value))}
+                      onChange={(selected) => setSelectedTerritories(selected?.map(s => s.value) || [])}
+                      placeholder="Select territories..."
+                      className="text-sm"
+                      classNamePrefix="select"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Search Customer</label>
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+                      <input
+                        type="text"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        placeholder="Search by customer name..."
+                        className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* ZBH and above (MH, MD, etc.): Zone, State, Region, Territory, Search Customer */}
+              {(user?.role === 'ZBH' || (isRMMOrAbove && user?.role !== 'RBH')) && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Zone</label>
+                    <Select
+                      isMulti
+                      options={zoneOptions}
+                      value={zoneOptions.filter(opt => selectedZones.includes(opt.value))}
+                      onChange={(selected) => setSelectedZones(selected?.map(s => s.value) || [])}
+                      placeholder="Select zones..."
+                      className="text-sm"
+                      classNamePrefix="select"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">State</label>
+                    <Select
+                      isMulti
+                      options={stateOptions}
+                      value={stateOptions.filter(opt => selectedStates.includes(opt.value))}
+                      onChange={(selected) => setSelectedStates(selected?.map(s => s.value) || [])}
+                      placeholder="Select states..."
+                      className="text-sm"
+                      classNamePrefix="select"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Region</label>
+                    <Select
+                      isMulti
+                      options={regionOptions}
+                      value={regionOptions.filter(opt => selectedRegions.includes(opt.value))}
+                      onChange={(selected) => setSelectedRegions(selected?.map(s => s.value) || [])}
+                      placeholder="Select regions..."
+                      className="text-sm"
+                      classNamePrefix="select"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Territory</label>
+                    <Select
+                      isMulti
+                      options={territoryOptions}
+                      value={territoryOptions.filter(opt => selectedTerritories.includes(opt.value))}
+                      onChange={(selected) => setSelectedTerritories(selected?.map(s => s.value) || [])}
+                      placeholder="Select territories..."
+                      className="text-sm"
+                      classNamePrefix="select"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Search Customer</label>
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+                      <input
+                        type="text"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        placeholder="Search by customer name..."
+                        className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {hasActiveFilters && (
+              <button
+                onClick={clearAllFilters}
+                className="px-3 sm:px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors text-sm font-medium flex items-center justify-center gap-2 w-full sm:w-auto"
+              >
+                <X className="w-4 h-4" />
+                Clear All Filters
+              </button>
+            )}
+          </div>
+        )}
+
+            {viewMode === 'product' && (
+          <div className="space-y-3 mt-4 pt-4 border-t border-gray-200">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+              {/* All roles start with Products */}
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Products</label>
+                <Select
+                  isMulti
+                  options={productOptions}
+                  value={productOptions.filter(opt => selectedProducts.includes(opt.value))}
+                  onChange={(selected) => setSelectedProducts(selected?.map(s => s.value) || [])}
+                  placeholder="Select products..."
+                  className="text-sm"
+                  classNamePrefix="select"
+                />
+              </div>
+
+              {/* TSM: Products, Territory */}
+              {user?.role === 'TSM' && (
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Territory</label>
+                  <Select
+                    isMulti
+                    options={territoryOptions}
+                    value={territoryOptions.filter(opt => selectedTerritories.includes(opt.value))}
+                    onChange={(selected) => setSelectedTerritories(selected?.map(s => s.value) || [])}
+                    placeholder="Select territories..."
+                    className="text-sm"
+                    classNamePrefix="select"
+                  />
+                </div>
+              )}
+
+              {/* RBH: Products, Region, State, Territory */}
+              {user?.role === 'RBH' && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Region</label>
+                    <Select
+                      isMulti
+                      options={regionOptions}
+                      value={regionOptions.filter(opt => selectedRegions.includes(opt.value))}
+                      onChange={(selected) => setSelectedRegions(selected?.map(s => s.value) || [])}
+                      placeholder="Select regions..."
+                      className="text-sm"
+                      classNamePrefix="select"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">State</label>
+                    <Select
+                      isMulti
+                      options={stateOptions}
+                      value={stateOptions.filter(opt => selectedStates.includes(opt.value))}
+                      onChange={(selected) => setSelectedStates(selected?.map(s => s.value) || [])}
+                      placeholder="Select states..."
+                      className="text-sm"
+                      classNamePrefix="select"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Territory</label>
+                    <Select
+                      isMulti
+                      options={territoryOptions}
+                      value={territoryOptions.filter(opt => selectedTerritories.includes(opt.value))}
+                      onChange={(selected) => setSelectedTerritories(selected?.map(s => s.value) || [])}
+                      placeholder="Select territories..."
+                      className="text-sm"
+                      classNamePrefix="select"
+                    />
+                  </div>
+                </>
+              )}
+
+              {/* ZBH: Products, Zone, State, Region, Territory */}
+              {user?.role === 'ZBH' && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Zone</label>
+                    <Select
+                      isMulti
+                      options={zoneOptions}
+                      value={zoneOptions.filter(opt => selectedZones.includes(opt.value))}
+                      onChange={(selected) => setSelectedZones(selected?.map(s => s.value) || [])}
+                      placeholder="Select zones..."
+                      className="text-sm"
+                      classNamePrefix="select"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">State</label>
+                    <Select
+                      isMulti
+                      options={stateOptions}
+                      value={stateOptions.filter(opt => selectedStates.includes(opt.value))}
+                      onChange={(selected) => setSelectedStates(selected?.map(s => s.value) || [])}
+                      placeholder="Select states..."
+                      className="text-sm"
+                      classNamePrefix="select"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Region</label>
+                    <Select
+                      isMulti
+                      options={regionOptions}
+                      value={regionOptions.filter(opt => selectedRegions.includes(opt.value))}
+                      onChange={(selected) => setSelectedRegions(selected?.map(s => s.value) || [])}
+                      placeholder="Select regions..."
+                      className="text-sm"
+                      classNamePrefix="select"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Territory</label>
+                    <Select
+                      isMulti
+                      options={territoryOptions}
+                      value={territoryOptions.filter(opt => selectedTerritories.includes(opt.value))}
+                      onChange={(selected) => setSelectedTerritories(selected?.map(s => s.value) || [])}
+                      placeholder="Select territories..."
+                      className="text-sm"
+                      classNamePrefix="select"
+                    />
+                  </div>
+                </>
+              )}
+
+              {/* Marketing Head and above: Products, Zone (all), State (all), Region (all), Territory (all) */}
+              {['MH', 'MD', 'VP', 'CFO', 'CHRO'].includes(user?.role || '') && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Zone (All)</label>
+                    <Select
+                      isMulti
+                      options={zoneOptions}
+                      value={zoneOptions}
+                      onChange={(selected) => setSelectedZones(selected?.map(s => s.value) || [])}
+                      placeholder="All zones selected..."
+                      className="text-sm"
+                      classNamePrefix="select"
+                      isDisabled={true}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">State (All)</label>
+                    <Select
+                      isMulti
+                      options={stateOptions}
+                      value={stateOptions}
+                      onChange={(selected) => setSelectedStates(selected?.map(s => s.value) || [])}
+                      placeholder="All states selected..."
+                      className="text-sm"
+                      classNamePrefix="select"
+                      isDisabled={true}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Region (All)</label>
+                    <Select
+                      isMulti
+                      options={regionOptions}
+                      value={regionOptions}
+                      onChange={(selected) => setSelectedRegions(selected?.map(s => s.value) || [])}
+                      placeholder="All regions selected..."
+                      className="text-sm"
+                      classNamePrefix="select"
+                      isDisabled={true}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Territory (All)</label>
+                    <Select
+                      isMulti
+                      options={territoryOptions}
+                      value={territoryOptions}
+                      onChange={(selected) => setSelectedTerritories(selected?.map(s => s.value) || [])}
+                      placeholder="All territories selected..."
+                      className="text-sm"
+                      classNamePrefix="select"
+                      isDisabled={true}
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+
+            {hasActiveFilters && (
+              <button
+                onClick={clearAllFilters}
+                className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors text-sm font-medium flex items-center justify-center gap-2 w-full sm:w-auto"
+              >
+                <X className="w-4 h-4" />
+                Clear All Filters
+              </button>
+            )}
+          </div>
+        )}
+
+            <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 sm:gap-3 mt-4 pt-3 border-t border-gray-200">
+              <div className="relative w-full sm:w-auto">
+                <button
+                  onClick={() => setShowDateFilter(!showDateFilter)}
+                  className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors w-full sm:w-auto justify-between sm:justify-start"
+                >
+                  <div className="flex items-center gap-2">
+                    <Calendar className="w-4 h-4" />
+                    <span className="text-sm font-medium">Date Range</span>
+                  </div>
+                  <ChevronDown className={`w-4 h-4 transition-transform ${showDateFilter ? 'rotate-180' : ''}`} />
+                </button>
+
+                {showDateFilter && (
+                  <div className="absolute top-full left-0 right-0 sm:right-auto mt-2 bg-white border border-gray-200 rounded-lg shadow-lg p-4 z-10 sm:w-72">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="font-semibold text-gray-900">Date Range</h3>
+                      <button onClick={() => setShowDateFilter(false)} className="text-gray-400 hover:text-gray-600">
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">From</label>
+                        <input
+                          type="date"
+                          value={dateFrom}
+                          onChange={(e) => setDateFrom(e.target.value)}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">To</label>
+                        <input
+                          type="date"
+                          value={dateTo}
+                          onChange={(e) => setDateTo(e.target.value)}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                      <button
+                        onClick={() => {
+                          setShowDateFilter(false);
+                          fetchReportData();
+                        }}
+                        className="w-full py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                      >
+                        Apply
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="relative w-full sm:w-auto">
+                <button
+                  onClick={() => setShowColumnFilter(!showColumnFilter)}
+                  className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors w-full sm:w-auto justify-between sm:justify-start"
+                >
+                  <div className="flex items-center gap-2">
+                    <Filter className="w-4 h-4" />
+                    <span className="text-sm font-medium">Columns</span>
+                  </div>
+                  <ChevronDown className={`w-4 h-4 transition-transform ${showColumnFilter ? 'rotate-180' : ''}`} />
+                </button>
+
+                {showColumnFilter && (
+                  <div className="absolute top-full left-0 mt-2 bg-white border border-gray-200 rounded-lg shadow-lg p-4 z-10 w-64">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="font-semibold text-gray-900">Show/Hide Columns</h3>
+                      <button onClick={() => setShowColumnFilter(false)} className="text-gray-400 hover:text-gray-600">
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                    <div className="space-y-2">
+                      {columns.map(col => (
+                        <label key={col.key} className="flex items-center gap-2 cursor-pointer hover:bg-gray-50 p-2 rounded">
+                          <input
+                            type="checkbox"
+                            checked={col.visible}
+                            onChange={() => toggleColumn(col.key)}
+                            className="rounded text-blue-600 focus:ring-2 focus:ring-blue-500"
+                          />
+                          <span className="text-sm text-gray-700">{col.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <button
+                onClick={handleGenerateReport}
+                disabled={!hasFiltersSelected}
+                className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg transition-colors text-sm font-medium w-full sm:w-auto justify-center ${
+                  hasFiltersSelected
+                    ? 'bg-blue-600 text-white hover:bg-blue-700'
+                    : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                }`}
+              >
+                <Play className="w-4 h-4" />
+                <span>Generate Report</span>
+              </button>
+            </div>
+        </>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+        <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg p-3 border border-blue-200">
+          <div className="flex items-center justify-between mb-2">
+            <div>
+              <p className="text-sm text-blue-700 font-medium mb-1">Farmer Liquidation - Distributor</p>
+              <p className="text-xl font-bold text-blue-900">₹32.40L</p>
+              <p className="text-xs text-blue-600 mt-1">7,850 Kg/Ltr</p>
+            </div>
+            <div className="p-2 bg-blue-200 rounded-lg">
+              <Package className="w-6 h-6 text-blue-700" />
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-lg p-3 border border-green-200">
+          <div className="flex items-center justify-between mb-2">
+            <div>
+              <p className="text-sm text-green-700 font-medium mb-1">Farmer Liquidation - Retailer</p>
+              <p className="text-xl font-bold text-green-900">₹8.10L</p>
+              <p className="text-xs text-green-600 mt-1">1,950 Kg/Ltr</p>
+            </div>
+            <div className="p-2 bg-green-200 rounded-lg">
+              <Package className="w-6 h-6 text-green-700" />
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-gradient-to-br from-purple-50 to-purple-100 rounded-lg p-3 border border-purple-200">
+          <div className="flex items-center justify-between mb-2">
+            <div>
+              <p className="text-sm text-purple-700 font-medium mb-1">Stock at Distributor</p>
+              <p className="text-xl font-bold text-purple-900">₹4.70L</p>
+              <p className="text-xs text-purple-600 mt-1">1,020 Kg/Ltr</p>
+            </div>
+            <div className="p-2 bg-purple-200 rounded-lg">
+              <Package className="w-6 h-6 text-purple-700" />
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-gradient-to-br from-orange-50 to-orange-100 rounded-lg p-3 border border-orange-200">
+          <div className="flex items-center justify-between mb-2">
+            <div>
+              <p className="text-sm text-orange-700 font-medium mb-1">Stock at Retailer</p>
+              <p className="text-xl font-bold text-orange-900">₹6.80L</p>
+              <p className="text-xs text-orange-600 mt-1">1,680 Kg/Ltr</p>
+            </div>
+            <div className="p-2 bg-orange-200 rounded-lg">
+              <Package className="w-6 h-6 text-orange-700" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex justify-end mb-3">
+        <button
+          onClick={downloadExcel}
+          disabled={!reportGenerated}
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors shadow-sm ${
+            reportGenerated
+              ? 'bg-green-600 text-white hover:bg-green-700'
+              : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+          }`}
+        >
+          <Download className="w-4 h-4" />
+          <span className="text-sm font-medium">Download Excel</span>
+        </button>
+      </div>
+
+      {viewMode === 'product' ? (
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">Product</th>
+                  <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">SKU</th>
+                  <th className="px-3 py-2 text-right text-xs font-medium text-gray-700 uppercase tracking-wider">Opening Stock (Value)</th>
+                  <th className="px-3 py-2 text-right text-xs font-medium text-gray-700 uppercase tracking-wider">Opening Stock (Units)</th>
+                  <th className="px-3 py-2 text-right text-xs font-medium text-gray-700 uppercase tracking-wider">YTD Sales (Value)</th>
+                  <th className="px-3 py-2 text-right text-xs font-medium text-gray-700 uppercase tracking-wider">YTD Sales (Units)</th>
+                  <th className="px-3 py-2 text-right text-xs font-medium text-gray-700 uppercase tracking-wider">Liquidation %</th>
+                  <th className="px-3 py-2 text-right text-xs font-medium text-gray-700 uppercase tracking-wider">Balance Stock (Value)</th>
+                  <th className="px-3 py-2 text-right text-xs font-medium text-gray-700 uppercase tracking-wider">Balance Stock (Units)</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200 bg-white">
+                {filteredProductData.length === 0 ? (
+                  <tr>
+                    <td colSpan={9} className="px-4 py-8 text-center text-gray-500">
+                      {productData.length === 0 ? 'No product data available' : 'No products match the current filters'}
+                    </td>
+                  </tr>
+                ) : (
+                  (() => {
+                    const productMap = new Map<string, {
+                      product_name: string;
+                      skus: Array<{
+                        sku_code: string;
+                        sku_name: string;
+                        opening_stock: number;
+                        opening_stock_units: number;
+                        ytd_sales: number;
+                        ytd_sales_units: number;
+                        balance_stock: number;
+                        balance_stock_units: number;
+                        unit: string;
+                      }>;
+                    }>();
+
+                    filteredProductData.forEach(item => {
+                      if (!productMap.has(item.product_code)) {
+                        productMap.set(item.product_code, {
+                          product_name: item.product_name,
+                          skus: []
+                        });
+                      }
+
+                      const product = productMap.get(item.product_code)!;
+                      product.skus.push({
+                        sku_code: item.sku_code,
+                        sku_name: item.sku_name,
+                        opening_stock: item.opening_stock,
+                        opening_stock_units: item.opening_stock_units,
+                        ytd_sales: item.ytd_sales,
+                        ytd_sales_units: item.ytd_sales_units,
+                        balance_stock: item.balance_stock,
+                        balance_stock_units: item.balance_stock_units,
+                        unit: item.unit
+                      });
+                    });
+
+                    return Array.from(productMap.entries()).flatMap(([productCode, product]) =>
+                      product.skus.map((sku, index) => {
+                        const liquidationPct = sku.opening_stock > 0
+                          ? ((sku.ytd_sales / sku.opening_stock) * 100).toFixed(1)
+                          : '0.0';
+
+                        return (
+                          <tr key={`${productCode}-${sku.sku_code}`} className="hover:bg-gray-50">
+                            {index === 0 && (
+                              <td
+                                rowSpan={product.skus.length}
+                                className="px-3 py-2 text-sm font-medium text-gray-900 border-r border-gray-200 bg-gray-50"
+                              >
+                                {product.product_name}
+                              </td>
+                            )}
+                            <td className="px-3 py-2 text-sm text-gray-700">{sku.sku_name}</td>
+                            <td className="px-3 py-2 text-sm text-right text-orange-600">
+                              ₹{(sku.opening_stock / 100000).toFixed(2)}L
+                            </td>
+                            <td className="px-3 py-2 text-sm text-right text-gray-600">
+                              <span className="text-xs">{sku.opening_stock_units.toLocaleString()} {sku.unit}</span>
+                            </td>
+                            <td className="px-3 py-2 text-sm text-right text-blue-600">
+                              ₹{(sku.ytd_sales / 100000).toFixed(2)}L
+                            </td>
+                            <td className="px-3 py-2 text-sm text-right text-gray-600">
+                              <span className="text-xs">{sku.ytd_sales_units.toLocaleString()} {sku.unit}</span>
+                            </td>
+                            <td className="px-3 py-2 text-sm text-right text-purple-600">
+                              {liquidationPct}%
+                            </td>
+                            <td className="px-3 py-2 text-sm text-right text-green-600">
+                              ₹{(sku.balance_stock / 100000).toFixed(2)}L
+                            </td>
+                            <td className="px-3 py-2 text-sm text-right text-gray-600">
+                              <span className="text-xs">{sku.balance_stock_units.toLocaleString()} {sku.unit}</span>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    );
+                  })()
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : viewMode === 'mdo' ? (
+        <div className="space-y-4">
+          {hasActiveFilters && filteredMdoData.length === 0 ? (
+            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-12 text-center">
+              <Search className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+              <p className="text-gray-600 text-lg mb-2">No MDOs found</p>
+              <p className="text-gray-500 text-sm">Try adjusting your filters or search term</p>
+              <button
+                onClick={clearAllFilters}
+                className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+              >
+                Clear All Filters
+              </button>
+            </div>
+          ) : (
+            <>
+              {hasActiveFilters && (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 flex items-center justify-between">
+                  <div className="text-sm text-blue-800">
+                    <span className="font-semibold">{filteredMdoData.length}</span> of <span className="font-semibold">{mdoData.length}</span> MDOs
+                    {searchQuery && <span> matching "{searchQuery}"</span>}
+                    {selectedZone !== 'all' && <span className="ml-2 px-2 py-0.5 bg-blue-100 rounded">Zone: {selectedZone}</span>}
+                    {selectedRegion !== 'all' && <span className="ml-2 px-2 py-0.5 bg-blue-100 rounded">Region: {selectedRegion}</span>}
+                    {selectedTerritory !== 'all' && <span className="ml-2 px-2 py-0.5 bg-blue-100 rounded">Territory: {selectedTerritory}</span>}
+                    {selectedCategory !== 'all' && <span className="ml-2 px-2 py-0.5 bg-green-100 rounded">Category: {selectedCategory}</span>}
+                    {selectedProduct !== 'all' && <span className="ml-2 px-2 py-0.5 bg-green-100 rounded">Product: {selectedProduct}</span>}
+                  </div>
+                  <button
+                    onClick={clearAllFilters}
+                    className="text-blue-600 hover:text-blue-800 text-sm font-medium whitespace-nowrap"
+                  >
+                    Clear All
+                  </button>
+                </div>
+              )}
+
+              {(user?.role === 'RBH' || user?.role === 'ZBH') ? (
+                // Hierarchical view: Zone -> TSM -> MDO -> Outlets
+                Array.from(hierarchicalData.entries()).map(([zone, tsmMap]) => {
+                  const isZoneExpanded = expandedMDOs.has(zone);
+                  const allMdos = Array.from(tsmMap.values()).flatMap(tsm => tsm.mdos);
+                  const zoneTotals = allMdos.reduce((acc, mdo) => ({
+                    openingStock: acc.openingStock + mdo.opening_stock,
+                    ytdSales: acc.ytdSales + mdo.ytd_sales,
+                    liquidation: acc.liquidation + mdo.liquidation,
+                    balanceStock: acc.balanceStock + mdo.balance_stock
+                  }), { openingStock: 0, ytdSales: 0, liquidation: 0, balanceStock: 0 });
+
+                  return (
+                    <div key={zone} className="bg-white rounded-lg shadow-sm border border-gray-200">
+                      <button
+                        onClick={() => toggleZone(zone)}
+                        className="w-full flex items-center justify-between p-4 hover:bg-gray-50 transition-colors"
+                      >
+                        <div className="flex items-center gap-3">
+                          {isZoneExpanded ? <ChevronUp className="w-5 h-5 text-gray-500" /> : <ChevronDown className="w-5 h-5 text-gray-500" />}
+                          <div className="text-left">
+                            <h3 className="font-semibold text-gray-900">{zone}</h3>
+                            <p className="text-sm text-gray-600">{tsmMap.size} TSMs • {allMdos.length} MDOs</p>
+                          </div>
+                        </div>
+                        <div className="flex gap-4 text-sm">
+                          <div className="text-right">
+                            <p className="text-xs text-gray-500">Opening Stock</p>
+                            <p className="font-semibold text-orange-600">₹{(zoneTotals.openingStock / 100000).toFixed(2)}L</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-xs text-gray-500">YTD Sales</p>
+                            <p className="font-semibold text-blue-600">₹{(zoneTotals.ytdSales / 100000).toFixed(2)}L</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-xs text-gray-500">Liquidation</p>
+                            <p className="font-semibold text-purple-600">₹{(zoneTotals.liquidation / 100000).toFixed(2)}L</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-xs text-gray-500">Balance</p>
+                            <p className="font-semibold text-green-600">₹{(zoneTotals.balanceStock / 100000).toFixed(2)}L</p>
+                          </div>
+                        </div>
+                      </button>
+
+                      {isZoneExpanded && (
+                        <div className="border-t border-gray-200 bg-gray-50">
+                          {Array.from(tsmMap.entries()).map(([tsmId, tsmData]) => {
+                            const isTsmExpanded = expandedMDOs.has(`tsm_${zone}_${tsmId}`);
+                            const tsmTotals = tsmData.mdos.reduce((acc, mdo) => ({
+                              openingStock: acc.openingStock + mdo.opening_stock,
+                              ytdSales: acc.ytdSales + mdo.ytd_sales,
+                              liquidation: acc.liquidation + mdo.liquidation,
+                              balanceStock: acc.balanceStock + mdo.balance_stock
+                            }), { openingStock: 0, ytdSales: 0, liquidation: 0, balanceStock: 0 });
+
+                            return (
+                              <div key={tsmId} className="border-b border-gray-200 last:border-b-0">
+                                <button
+                                  onClick={() => toggleTSM(zone, tsmId)}
+                                  className="w-full flex items-center justify-between p-4 hover:bg-gray-100 transition-colors"
+                                >
+                                  <div className="flex items-center gap-3">
+                                    {isTsmExpanded ? <ChevronUp className="w-4 h-4 text-gray-500" /> : <ChevronDown className="w-4 h-4 text-gray-500" />}
+                                    <User className="w-5 h-5 text-blue-600" />
+                                    <div className="text-left">
+                                      <h4 className="font-medium text-gray-900">{tsmData.tsmName}</h4>
+                                      <p className="text-xs text-gray-500">TSM • {tsmData.mdos.length} MDOs</p>
+                                    </div>
+                                  </div>
+                                  <div className="flex gap-4 text-xs">
+                                    <div className="text-right">
+                                      <p className="text-gray-500">Opening</p>
+                                      <p className="font-medium text-orange-600">₹{(tsmTotals.openingStock / 100000).toFixed(2)}L</p>
+                                    </div>
+                                    <div className="text-right">
+                                      <p className="text-gray-500">Sales</p>
+                                      <p className="font-medium text-blue-600">₹{(tsmTotals.ytdSales / 100000).toFixed(2)}L</p>
+                                    </div>
+                                    <div className="text-right">
+                                      <p className="text-gray-500">Liquidation</p>
+                                      <p className="font-medium text-purple-600">₹{(tsmTotals.liquidation / 100000).toFixed(2)}L</p>
+                                    </div>
+                                    <div className="text-right">
+                                      <p className="text-gray-500">Balance</p>
+                                      <p className="font-medium text-green-600">₹{(tsmTotals.balanceStock / 100000).toFixed(2)}L</p>
+                                    </div>
+                                  </div>
+                                </button>
+
+                                {isTsmExpanded && (
+                                  <div className="bg-white border-t border-gray-200">
+                                    {tsmData.mdos.map((mdo) => {
+                                      const isMDOExpanded = expandedMDOs.has(`mdo_${mdo.mdo_id}`);
+                                      return (
+                                        <div key={mdo.mdo_id} className="border-b border-gray-100 last:border-b-0">
+                                          <button
+                                            onClick={() => toggleMDO(mdo.mdo_id)}
+                                            className="w-full flex items-center justify-between p-3 hover:bg-gray-50 transition-colors"
+                                          >
+                                            <div className="flex items-center gap-2">
+                                              {isMDOExpanded ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
+                                              <div className="text-left">
+                                                <p className="font-medium text-gray-900 text-sm">{mdo.mdo_name}</p>
+                                                <p className="text-xs text-gray-500">{mdo.outlet_count} customers • {mdo.territory}</p>
+                                              </div>
+                                            </div>
+                                            <div className="flex gap-3 text-xs">
+                                              <div className="text-right">
+                                                <p className="text-gray-500">Opening</p>
+                                                <p className="font-medium text-orange-600">₹{(mdo.opening_stock / 100000).toFixed(2)}L</p>
+                                              </div>
+                                              <div className="text-right">
+                                                <p className="text-gray-500">Sales</p>
+                                                <p className="font-medium text-blue-600">₹{(mdo.ytd_sales / 100000).toFixed(2)}L</p>
+                                              </div>
+                                              <div className="text-right">
+                                                <p className="text-gray-500">Liquidation</p>
+                                                <p className="font-medium text-purple-600">₹{(mdo.liquidation / 100000).toFixed(2)}L</p>
+                                              </div>
+                                              <div className="text-right">
+                                                <p className="text-gray-500">Balance</p>
+                                                <p className="font-medium text-green-600">₹{(mdo.balance_stock / 100000).toFixed(2)}L</p>
+                                              </div>
+                                            </div>
+                                          </button>
+
+                                          {isMDOExpanded && mdo.outlets.length > 0 && (
+                                            <div className="bg-gray-50 px-3 pb-3">
+                                              <div className="overflow-x-auto">
+                                                <table className="w-full text-xs">
+                                                  <thead className="bg-gray-100">
+                                                    <tr>
+                                                      <th className="px-2 py-1.5 text-left text-xs font-medium text-gray-700">Customer</th>
+                                                      <th className="px-2 py-1.5 text-left text-xs font-medium text-gray-700">Owner</th>
+                                                      <th className="px-2 py-1.5 text-right text-xs font-medium text-gray-700">Opening</th>
+                                                      <th className="px-2 py-1.5 text-right text-xs font-medium text-gray-700">Sales</th>
+                                                      <th className="px-2 py-1.5 text-right text-xs font-medium text-gray-700">Liquidation</th>
+                                                      <th className="px-2 py-1.5 text-right text-xs font-medium text-gray-700">Liq %</th>
+                                                      <th className="px-2 py-1.5 text-right text-xs font-medium text-gray-700">Balance</th>
+                                                    </tr>
+                                                  </thead>
+                                                  <tbody className="bg-white divide-y divide-gray-200">
+                                                    {mdo.outlets.map((outlet) => {
+                                                      const liqPct = outlet.opening_stock > 0 ? ((outlet.liquidation / outlet.opening_stock) * 100).toFixed(1) : '0.0';
+                                                      return (
+                                                        <tr key={outlet.id} className="hover:bg-gray-50">
+                                                          <td className="px-2 py-1.5 text-gray-900">{outlet.outlet_name}</td>
+                                                          <td className="px-2 py-1.5 text-gray-700">{outlet.owner_name}</td>
+                                                          <td className="px-2 py-1.5 text-right text-orange-600">₹{(outlet.opening_stock / 100000).toFixed(2)}L</td>
+                                                          <td className="px-2 py-1.5 text-right text-blue-600">₹{(outlet.sales / 100000).toFixed(2)}L</td>
+                                                          <td className="px-2 py-1.5 text-right text-purple-600">₹{(outlet.liquidation / 100000).toFixed(2)}L</td>
+                                                          <td className="px-2 py-1.5 text-right font-medium text-gray-900">{liqPct}%</td>
+                                                          <td className="px-2 py-1.5 text-right text-green-600">₹{(outlet.balance_stock / 100000).toFixed(2)}L</td>
+                                                        </tr>
+                                                      );
+                                                    })}
+                                                  </tbody>
+                                                </table>
+                                              </div>
+                                            </div>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              ) : (
+                // TSM View: Zone -> MDO -> Outlets (flat, no TSM level)
+                Array.from(groupedData.entries()).map(([zone, mdos]) => {
+                  const isZoneExpanded = expandedMDOs.has(zone);
+                  const zoneTotals = mdos.reduce((acc, mdo) => ({
+                    openingStock: acc.openingStock + mdo.opening_stock,
+                    ytdSales: acc.ytdSales + mdo.ytd_sales,
+                    liquidation: acc.liquidation + mdo.liquidation,
+                    balanceStock: acc.balanceStock + mdo.balance_stock
+                  }), { openingStock: 0, ytdSales: 0, liquidation: 0, balanceStock: 0 });
+
+                  return (
+                    <div key={zone} className="bg-white rounded-lg shadow-sm border border-gray-200">
+                      <button
+                        onClick={() => toggleZone(zone)}
+                        className="w-full flex items-center justify-between p-4 hover:bg-gray-50 transition-colors"
+                      >
+                        <div className="flex items-center gap-3">
+                          {isZoneExpanded ? <ChevronUp className="w-5 h-5 text-gray-500" /> : <ChevronDown className="w-5 h-5 text-gray-500" />}
+                          <div className="text-left">
+                            <h3 className="font-semibold text-gray-900">{zone}</h3>
+                            <p className="text-sm text-gray-600">{mdos.length} MDOs</p>
+                          </div>
+                        </div>
+                        <div className="flex gap-4 text-sm">
+                          <div className="text-right">
+                            <p className="text-xs text-gray-500">Opening Stock</p>
+                            <p className="font-semibold text-orange-600">₹{(zoneTotals.openingStock / 100000).toFixed(2)}L</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-xs text-gray-500">YTD Sales</p>
+                            <p className="font-semibold text-blue-600">₹{(zoneTotals.ytdSales / 100000).toFixed(2)}L</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-xs text-gray-500">Liquidation</p>
+                            <p className="font-semibold text-purple-600">₹{(zoneTotals.liquidation / 100000).toFixed(2)}L</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-xs text-gray-500">Balance</p>
+                            <p className="font-semibold text-green-600">₹{(zoneTotals.balanceStock / 100000).toFixed(2)}L</p>
+                          </div>
+                        </div>
+                      </button>
+
+                      {isZoneExpanded && (
+                        <div className="border-t border-gray-200">
+                          {mdos.map((mdo) => {
+                            const isMDOExpanded = expandedMDOs.has(`mdo_${mdo.mdo_id}`);
+                            return (
+                              <div key={mdo.mdo_id} className="border-b border-gray-100 last:border-b-0">
+                                <button
+                                  onClick={() => toggleMDO(mdo.mdo_id)}
+                                  className="w-full flex items-center justify-between p-4 hover:bg-gray-50 transition-colors"
+                                >
+                                  <div className="flex items-center gap-3">
+                                    {isMDOExpanded ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
+                                    <div className="text-left">
+                                      <p className="font-medium text-gray-900">{mdo.mdo_name}</p>
+                                      <p className="text-xs text-gray-500">{mdo.outlet_count} customers | {mdo.territory}</p>
+                                    </div>
+                                  </div>
+                                  <div className="flex gap-3 text-sm">
+                                    <div className="text-right">
+                                      <p className="text-xs text-gray-500">Opening</p>
+                                      <p className="font-medium text-orange-600">₹{(mdo.opening_stock / 100000).toFixed(2)}L</p>
+                                    </div>
+                                    <div className="text-right">
+                                      <p className="text-xs text-gray-500">Sales</p>
+                                      <p className="font-medium text-blue-600">₹{(mdo.ytd_sales / 100000).toFixed(2)}L</p>
+                                    </div>
+                                    <div className="text-right">
+                                      <p className="text-xs text-gray-500">Liquidation</p>
+                                      <p className="font-medium text-purple-600">₹{(mdo.liquidation / 100000).toFixed(2)}L</p>
+                                    </div>
+                                    <div className="text-right">
+                                      <p className="text-xs text-gray-500">Balance</p>
+                                      <p className="font-medium text-green-600">₹{(mdo.balance_stock / 100000).toFixed(2)}L</p>
+                                    </div>
+                                  </div>
+                                </button>
+
+                                {isMDOExpanded && mdo.outlets.length > 0 && (
+                                  <div className="bg-gray-50 px-4 pb-4">
+                                    <div className="overflow-x-auto">
+                                      <table className="w-full text-sm">
+                                        <thead className="bg-gray-100">
+                                          <tr>
+                                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-700">Customer</th>
+                                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-700">Owner</th>
+                                            <th className="px-3 py-2 text-right text-xs font-medium text-gray-700">Opening</th>
+                                            <th className="px-3 py-2 text-right text-xs font-medium text-gray-700">Sales</th>
+                                            <th className="px-3 py-2 text-right text-xs font-medium text-gray-700">Liquidation</th>
+                                            <th className="px-3 py-2 text-right text-xs font-medium text-gray-700">Liq %</th>
+                                            <th className="px-3 py-2 text-right text-xs font-medium text-gray-700">Balance</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody className="bg-white divide-y divide-gray-200">
+                                          {mdo.outlets.map((outlet) => {
+                                            const liqPct = outlet.opening_stock > 0 ? ((outlet.liquidation / outlet.opening_stock) * 100).toFixed(1) : '0.0';
+                                            return (
+                                              <tr key={outlet.id} className="hover:bg-gray-50">
+                                                <td className="px-3 py-2 text-gray-900">{outlet.outlet_name}</td>
+                                                <td className="px-3 py-2 text-gray-700">{outlet.owner_name}</td>
+                                                <td className="px-3 py-2 text-right text-orange-600">₹{(outlet.opening_stock / 100000).toFixed(2)}L</td>
+                                                <td className="px-3 py-2 text-right text-blue-600">₹{(outlet.sales / 100000).toFixed(2)}L</td>
+                                                <td className="px-3 py-2 text-right text-purple-600">₹{(outlet.liquidation / 100000).toFixed(2)}L</td>
+                                                <td className="px-3 py-2 text-right font-medium text-gray-900">{liqPct}%</td>
+                                                <td className="px-3 py-2 text-right text-green-600">₹{(outlet.balance_stock / 100000).toFixed(2)}L</td>
+                                              </tr>
+                                            );
+                                          })}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </>
+          )}
+        </div>
+      ) : (
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-gray-50">
+                <tr>
+                  {columns.filter(col => col.visible).map(col => (
+                    <th key={col.key} className="px-4 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">
+                      {col.label}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200 bg-white">
+                {filteredMdoData.flatMap(mdo =>
+                  mdo.outlets.map((outlet) => (
+                    <tr key={outlet.id} className="hover:bg-gray-50">
+                      {columns.filter(col => col.visible).map(col => (
+                        <td key={col.key} className={`px-3 py-2 text-sm ${
+                          col.key.includes('Units') ? 'text-right text-gray-600' :
+                          col.key === 'openingStock' ? 'text-right text-orange-600' :
+                          col.key === 'ytdSales' ? 'text-right text-blue-600' :
+                          col.key === 'liquidation' ? 'text-right text-purple-600' :
+                          col.key === 'balanceStock' ? 'text-right text-green-600' :
+                          'text-gray-900'
+                        }`}>
+                          {col.key === 'name' && outlet.outlet_name}
+                          {col.key === 'zone' && mdo.zone}
+                          {col.key === 'region' && mdo.region}
+                          {col.key === 'territory' && mdo.territory}
+                          {col.key === 'openingStock' && formatValue(outlet.opening_stock, 'number')}
+                          {col.key === 'openingStockUnits' && (
+                            <span className="text-xs">{(outlet.opening_stock_units || 0).toLocaleString()} kg/Ltr</span>
+                          )}
+                          {col.key === 'ytdSales' && formatValue(outlet.sales, 'number')}
+                          {col.key === 'ytdSalesUnits' && (
+                            <span className="text-xs">{(outlet.sales_units || 0).toLocaleString()} kg/Ltr</span>
+                          )}
+                          {col.key === 'liquidation' && formatValue(outlet.liquidation, 'number')}
+                          {col.key === 'liquidationUnits' && (
+                            <span className="text-xs">{(outlet.liquidation_units || 0).toLocaleString()} kg/Ltr</span>
+                          )}
+                          {col.key === 'balanceStock' && formatValue(outlet.balance_stock, 'number')}
+                          {col.key === 'balanceStockUnits' && (
+                            <span className="text-xs">{(outlet.balance_stock_units || 0).toLocaleString()} kg/Ltr</span>
+                          )}
+                          {col.key === 'lastUpdated' && formatValue(outlet.updated_at, 'lastUpdated')}
+                        </td>
+                      ))}
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {mdoData.length === 0 && !loading && (
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-12 text-center">
+          <p className="text-gray-500">No report data available for the selected period.</p>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default Reports;
