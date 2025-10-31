@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Store, Package, Eye, MapPin, Calendar, Search, Filter, TrendingUp, TrendingDown, CheckCircle, Clock, User, X, Camera, FileText, CreditCard as Edit3 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import Entity360View from '../components/Entity360View';
 import { SignatureCapture } from '../components/SignatureCapture';
 import { MediaUpload } from '../components/MediaUpload';
+import { StockRectificationModal } from '../components/reports/StockRectificationModal';
 
 interface RetailerInventory {
   id: string;
@@ -75,6 +76,7 @@ const RetailerStockVerification: React.FC = () => {
   const navigate = useNavigate();
   const { retailerId } = useParams<{ retailerId?: string }>();
   const { user } = useAuth();
+  console.log('[Retailer Stock] Render - retailerId from URL:', retailerId);
   const [retailers, setRetailers] = useState<Retailer[]>([]);
   const [selectedRetailer, setSelectedRetailer] = useState<Retailer | null>(null);
   const [verificationHistory, setVerificationHistory] = useState<VerificationHistory[]>([]);
@@ -95,8 +97,11 @@ const RetailerStockVerification: React.FC = () => {
   const [expandedSKU, setExpandedSKU] = useState<string | null>(null);
   const [showSearchDropdown, setShowSearchDropdown] = useState(false);
   const [searchSuggestions, setSearchSuggestions] = useState<Retailer[]>([]);
+  const [showRectifyModal, setShowRectifyModal] = useState(false);
+  const [selectedRectifyStock, setSelectedRectifyStock] = useState<any>(null);
 
   useEffect(() => {
+    console.log('[Retailer Stock] Component mounted, fetching data...');
     fetchRetailersData();
   }, []);
 
@@ -143,12 +148,14 @@ const RetailerStockVerification: React.FC = () => {
 
   const fetchRetailersData = async () => {
     try {
+      console.log('[Retailer Stock] Starting data fetch...');
       setLoading(true);
 
       const { data: inventoryData, error } = await supabase
         .from('retailer_inventory')
         .select('*');
 
+      console.log('[Retailer Stock] Supabase response:', { data: inventoryData, error });
       if (error) throw error;
 
       const mockRetailerData: RetailerInventory[] = inventoryData && inventoryData.length > 0 ? inventoryData : [
@@ -301,9 +308,11 @@ const RetailerStockVerification: React.FC = () => {
         : 0;
 
       setOverallMetrics(overall);
+      console.log('[Retailer Stock] Data fetch complete:', { retailersCount: retailersArray.length });
     } catch (error) {
-      console.error('Error fetching retailers:', error);
+      console.error('[Retailer Stock] Error fetching retailers:', error);
     } finally {
+      console.log('[Retailer Stock] Setting loading to false');
       setLoading(false);
     }
   };
@@ -423,7 +432,16 @@ const RetailerStockVerification: React.FC = () => {
     return 'bg-red-500';
   };
 
+  console.log('[Retailer Stock] Render state:', {
+    loading,
+    retailersCount: retailers.length,
+    filteredCount: filteredRetailers.length,
+    retailerId,
+    showRectifyModal
+  });
+
   if (loading) {
+    console.log('[Retailer Stock] Showing loading state...');
     return (
       <div className="p-6 max-w-7xl mx-auto">
         <div className="text-center py-12">
@@ -433,6 +451,8 @@ const RetailerStockVerification: React.FC = () => {
       </div>
     );
   }
+
+  console.log('[Retailer Stock] Rendering main content...');
 
   return (
     <div className="p-3 sm:p-6 max-w-7xl mx-auto">

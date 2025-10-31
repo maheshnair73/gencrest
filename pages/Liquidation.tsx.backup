@@ -1,0 +1,3162 @@
+import React, { useState, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useLiquidationCalculation } from '../hooks/useLiquidationCalculation';
+import { useGeolocation } from '../hooks/useGeolocation';
+import { useAuth } from '../contexts/AuthContext';
+import { SignatureCapture } from '../components/SignatureCapture';
+import Entity360View from '../components/Entity360View';
+import { getDataScopeForRole } from '../utils/liquidationFilters';
+import { ArrowLeft, Package, TrendingUp, Droplets, Target, Building, Building2, MapPin, Phone, Calendar, Eye, CreditCard as Edit, Save, X, Plus, Minus, Camera, Upload, FileText, CheckCircle, AlertTriangle, Clock, User, Shield, Users, ChevronDown, ChevronUp, Download, Hash } from 'lucide-react';
+
+interface SKUData {
+  skuCode: string;
+  skuName: string;
+  unit: string;
+  openingStock: number;
+  ytdSales: number;
+  liquidated: number;
+  currentStock: number;
+  unitPrice: number;
+}
+
+interface TransactionData {
+  date: string;
+  type: 'Sale' | 'Return';
+  quantity: number;
+  value: number;
+}
+
+interface ProductData {
+  productId: string;
+  productCode: string;
+  productName: string;
+  category: string;
+  skus: SKUData[];
+}
+
+interface ProofData {
+  id: string;
+  type: 'photo' | 'document' | 'signature';
+  name: string;
+  url: string;
+  timestamp: string;
+  location?: {
+    latitude: number;
+    longitude: number;
+    accuracy?: number;
+  };
+  metadata: {
+    capturedAt: string;
+    deviceInfo: string;
+    capturedBy: string;
+    fileSize?: number;
+    fileType?: string;
+  };
+}
+
+const Liquidation: React.FC = () => {
+  const navigate = useNavigate();
+  const { latitude, longitude, error: locationError } = useGeolocation();
+  const { user } = useAuth();
+  const {
+    overallMetrics,
+    distributorMetrics,
+    updateDistributorMetrics,
+    calculateLiquidationMetrics,
+    BUSINESS_RULES
+  } = useLiquidationCalculation();
+
+  const filteredDistributors = useMemo(() => {
+    if (!user) return distributorMetrics;
+
+    const scope = getDataScopeForRole(user.role);
+
+    switch (scope) {
+      case 'territory':
+        return distributorMetrics.filter(d => d.territory === user.territory);
+
+      case 'state':
+        return distributorMetrics.filter(d => d.state === user.state);
+
+      case 'zone':
+        return distributorMetrics.filter(d => d.zone === user.zone);
+
+      case 'all':
+      default:
+        return distributorMetrics;
+    }
+  }, [distributorMetrics, user]);
+
+  const filteredMetrics = useMemo(() => {
+    if (filteredDistributors.length === 0) {
+      return overallMetrics;
+    }
+
+    const totalVolume = filteredDistributors.reduce((sum, d) =>
+      sum + d.metrics.openingStock.volume + d.metrics.ytdNetSales.volume, 0
+    );
+    const liquidatedVolume = filteredDistributors.reduce((sum, d) =>
+      sum + d.metrics.liquidation.volume, 0
+    );
+    const liquidationPercentage = totalVolume > 0
+      ? Math.round((liquidatedVolume / totalVolume) * 100)
+      : 0;
+
+    return {
+      openingStock: {
+        volume: filteredDistributors.reduce((sum, d) => sum + d.metrics.openingStock.volume, 0),
+        value: filteredDistributors.reduce((sum, d) => sum + d.metrics.openingStock.value, 0)
+      },
+      ytdNetSales: {
+        volume: filteredDistributors.reduce((sum, d) => sum + d.metrics.ytdNetSales.volume, 0),
+        value: filteredDistributors.reduce((sum, d) => sum + d.metrics.ytdNetSales.value, 0)
+      },
+      liquidation: {
+        volume: liquidatedVolume,
+        value: filteredDistributors.reduce((sum, d) => sum + d.metrics.liquidation.value, 0)
+      },
+      balanceStock: {
+        volume: filteredDistributors.reduce((sum, d) => sum + d.metrics.balanceStock.volume, 0),
+        value: filteredDistributors.reduce((sum, d) => sum + d.metrics.balanceStock.value, 0)
+      },
+      liquidationPercentage,
+      lastUpdated: new Date().toISOString()
+    };
+  }, [filteredDistributors, overallMetrics]);
+
+  const [showDetailModal, setShowDetailModal] = useState(false);
+  const [selectedMetric, setSelectedMetric] = useState<string>('');
+  const [selectedDistributorId, setSelectedDistributorId] = useState<string | null>(null);
+  const [showVerifyModal, setShowVerifyModal] = useState(false);
+  const [selectedVerificationMethod, setSelectedVerificationMethod] = useState<'letterhead' | 'esign' | ''>('');
+  const [uploadedProofs, setUploadedProofs] = useState<ProofData[]>([]);
+  const [isCapturing, setIsCapturing] = useState(false);
+  const [showSignatureCapture, setShowSignatureCapture] = useState(false);
+
+  // Stock verification state
+  const [verifyTab, setVerifyTab] = useState<'stock-details' | 'verification'>('stock-details');
+  const [skuQuantities, setSkuQuantities] = useState<Record<string, number>>({});
+  const [stockMovements, setStockMovements] = useState<Record<string, {
+    type: 'farmer' | 'retailer' | 'return';
+    quantity: number;
+    retailerName?: string;
+    remarks?: string;
+  }>>({
+    'FGCMGM0092-250': {
+      type: 'retailer',
+      quantity: 400,
+      retailerName: 'Green Farm Supplies'
+    },
+    'FGCMGM0095-250': {
+      type: 'farmer',
+      quantity: 350
+    },
+    'FGCMGM0098-250': {
+      type: 'retailer',
+      quantity: 450,
+      retailerName: 'Kisan Agro Store'
+    },
+    'FGCMGM0104-250': {
+      type: 'farmer',
+      quantity: 375
+    }
+  });
+  const [selectedDistributorForVerify, setSelectedDistributorForVerify] = useState<string>('');
+
+  // Stock update state
+  const [showStockUpdateModal, setShowStockUpdateModal] = useState(false);
+  const [selectedSKUForUpdate, setSelectedSKUForUpdate] = useState<{sku: SKUData, productName: string, productCode: string} | null>(null);
+  const [newStockValue, setNewStockValue] = useState<string>('');
+  const [showTransactionTypeModal, setShowTransactionTypeModal] = useState(false);
+  const [stockDifference, setStockDifference] = useState<number>(0);
+  const [showRetailerDetailsModal, setShowRetailerDetailsModal] = useState(false);
+  const [retailersList, setRetailersList] = useState<Array<{name: string, businessName: string, location: string, quantity: number}>>([]);
+  const [currentRetailer, setCurrentRetailer] = useState({
+    name: '',
+    businessName: '',
+    location: '',
+    quantity: 0
+  });
+
+  const [showAllocationWarning, setShowAllocationWarning] = useState(false);
+  const [allocationWarningData, setAllocationWarningData] = useState<{
+    stockDecrease: number;
+    totalAllocated: number;
+    missing: number;
+    unit: string;
+  } | null>(null);
+
+  const existingRetailers = [
+    { name: 'Ramesh Kumar', businessName: 'Green Farm Supplies', location: 'Sector 15, Delhi' },
+    { name: 'Suresh Patel', businessName: 'Kisan Agro Store', location: 'MG Road, Gurgaon' },
+    { name: 'Vijay Singh', businessName: 'Modern Agriculture Center', location: 'Noida Extension' },
+    { name: 'Prakash Sharma', businessName: 'Farmers Choice', location: 'Faridabad Market' },
+    { name: 'Rajesh Verma', businessName: 'Agro Solutions Hub', location: 'Greater Noida' }
+  ];
+
+  // Accordion state for product and SKU details
+  const [expandedProducts, setExpandedProducts] = useState<Set<string>>(new Set());
+  const [expandedSKUs, setExpandedSKUs] = useState<Set<string>>(new Set());
+  const [expandedDistributorStats, setExpandedDistributorStats] = useState<Set<string>>(new Set());
+
+  // 360 View Modal
+  const [show360ViewModal, setShow360ViewModal] = useState(false);
+  const [selected360Entity, setSelected360Entity] = useState<any>(null);
+  const [view360Tab, setView360Tab] = useState<'overview' | 'orders' | 'liquidation'>('overview');
+  const [activityHistoryTab, setActivityHistoryTab] = useState<'timeline' | 'visits' | 'orders' | 'payments' | 'advances' | 'liquidations'>('timeline');
+
+  // Modal tab state
+  const [modalTab, setModalTab] = useState<'details' | 'verify'>('details');
+  const [verificationLetter, setVerificationLetter] = useState<File | null>(null);
+  const [verificationMetadata, setVerificationMetadata] = useState<{
+    capturedAt: string;
+    location: string;
+    userName: string;
+    designation: string;
+    latitude?: number;
+    longitude?: number;
+  } | null>(null);
+  const [showLetterPreview, setShowLetterPreview] = useState(false);
+
+  // Search state
+  const [searchType, setSearchType] = useState<'distributor' | 'retailer'>('distributor');
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Outlet location (sample coordinates - in production this would come from the outlet data)
+  const OUTLET_LOCATION = {
+    latitude: 28.5355,
+    longitude: 77.3910,
+    name: 'Green Valley Outlet'
+  };
+
+  // Geofence radius in meters
+  const GEOFENCE_RADIUS = 1000;
+
+  // Calculate distance between two coordinates using Haversine formula
+  const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+    const R = 6371e3; // Earth's radius in meters
+    const φ1 = lat1 * Math.PI / 180;
+    const φ2 = lat2 * Math.PI / 180;
+    const Δφ = (lat2 - lat1) * Math.PI / 180;
+    const Δλ = (lon2 - lon1) * Math.PI / 180;
+
+    const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+              Math.cos(φ1) * Math.cos(φ2) *
+              Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+    return R * c;
+  };
+
+  // Check if user is within geofence
+  const isWithinGeofence = (): { valid: boolean; distance: number; message: string } => {
+    // Bypass geofence for Dummy Distributor (demo/testing purposes)
+    const isDummyDistributor = true; // Always allow for demo
+
+    if (isDummyDistributor) {
+      return {
+        valid: true,
+        distance: 0,
+        message: 'Location verified for demo.'
+      };
+    }
+
+    if (!latitude || !longitude) {
+      return {
+        valid: false,
+        distance: -1,
+        message: 'Unable to determine your location. Please enable location services.'
+      };
+    }
+
+    const distance = calculateDistance(
+      latitude,
+      longitude,
+      OUTLET_LOCATION.latitude,
+      OUTLET_LOCATION.longitude
+    );
+
+    const formatDistance = (dist: number): string => {
+      if (dist >= 1000) {
+        return `${(dist / 1000).toFixed(2)} km`;
+      }
+      return `${Math.round(dist)}m`;
+    };
+
+    if (distance > GEOFENCE_RADIUS) {
+      return {
+        valid: false,
+        distance: Math.round(distance),
+        message: `You are ${formatDistance(distance)} away from ${OUTLET_LOCATION.name}. You must be within ${GEOFENCE_RADIUS}m to submit proof or update stock.`
+      };
+    }
+
+    return {
+      valid: true,
+      distance: Math.round(distance),
+      message: `Location verified. You are ${formatDistance(distance)} from the outlet.`
+    };
+  };
+
+  // Sample retailer data
+  const retailerMetrics = [
+    {
+      id: 'RET001',
+      retailerName: 'Green Farm Supplies',
+      retailerCode: 'GFS789',
+      linkedDistributors: ['SRI RAMA SEEDS AND PESTICIDES', 'KISAN DISTRIBUTORS'],
+      territory: 'Sector 15',
+      region: 'Delhi NCR',
+      zone: 'North Zone',
+      metrics: {
+        openingStock: { volume: 50, value: 0.68 },
+        ytdNetSales: { volume: 20, value: 0.27 },
+        liquidation: { volume: 33, value: 0.44 },
+        balanceStock: { volume: 17, value: 0.23 },
+        liquidationPercentage: 65,
+        lastUpdated: new Date('2025-10-03')
+      },
+      status: 'Active',
+      priority: 'High'
+    },
+    {
+      id: 'RET002',
+      retailerName: 'Kisan Agro Store',
+      retailerCode: 'KAS456',
+      linkedDistributors: ['SRI RAMA SEEDS AND PESTICIDES'],
+      territory: 'Market Road',
+      region: 'Delhi NCR',
+      zone: 'North Zone',
+      metrics: {
+        openingStock: { volume: 30, value: 0.41 },
+        ytdNetSales: { volume: 15, value: 0.20 },
+        liquidation: { volume: 14, value: 0.18 },
+        balanceStock: { volume: 16, value: 0.22 },
+        liquidationPercentage: 45,
+        lastUpdated: new Date('2025-10-02')
+      },
+      status: 'Active',
+      priority: 'Medium'
+    },
+    {
+      id: 'RET003',
+      retailerName: 'Bharat Seeds & Fertilizers',
+      retailerCode: 'BSF123',
+      linkedDistributors: ['KISAN DISTRIBUTORS', 'RURAL AGRO CENTER'],
+      territory: 'Village Road',
+      region: 'Delhi NCR',
+      zone: 'North Zone',
+      metrics: {
+        openingStock: { volume: 40, value: 0.54 },
+        ytdNetSales: { volume: 25, value: 0.34 },
+        liquidation: { volume: 32, value: 0.43 },
+        balanceStock: { volume: 8, value: 0.11 },
+        liquidationPercentage: 80,
+        lastUpdated: new Date('2025-10-04')
+      },
+      status: 'Active',
+      priority: 'High'
+    }
+  ];
+
+  const toggleProduct = (productId: string) => {
+    setExpandedProducts(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(productId)) {
+        newSet.delete(productId);
+      } else {
+        newSet.add(productId);
+      }
+      return newSet;
+    });
+  };
+
+  const toggleSKU = (skuCode: string) => {
+    setExpandedSKUs(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(skuCode)) {
+        newSet.delete(skuCode);
+      } else {
+        newSet.add(skuCode);
+      }
+      return newSet;
+    });
+  };
+
+  // Sample product data - showing 4 products with some retailer liquidations
+  const productData: ProductData[] = [
+    {
+      productId: 'P001',
+      productCode: 'FGCMGM0092',
+      productName: 'Agrosatva',
+      category: 'Biostimulant',
+      skus: [
+        {
+          skuCode: 'FGCMGM0092-250',
+          skuName: 'Agrosatva - 250 ml',
+          unit: 'Nos',
+          openingStock: 167,
+          ytdSales: 83,
+          liquidated: 33,
+          currentStock: 217,
+          unitPrice: 27.6
+        },
+        {
+          skuCode: 'FGCMGM0091-500',
+          skuName: 'Agrosatva - 500 ml',
+          unit: 'Nos',
+          openingStock: 125,
+          ytdSales: 63,
+          liquidated: 25,
+          currentStock: 163,
+          unitPrice: 27.6
+        }
+      ]
+    },
+    {
+      productId: 'P002',
+      productCode: 'FGCMGM0095',
+      productName: 'Agrobest',
+      category: 'Biostimulant',
+      skus: [
+        {
+          skuCode: 'FGCMGM0095-250',
+          skuName: 'Agrobest - 250 ml',
+          unit: 'Nos',
+          openingStock: 146,
+          ytdSales: 73,
+          liquidated: 29,
+          currentStock: 190,
+          unitPrice: 27.6
+        },
+        {
+          skuCode: 'FGCMGM0096-500',
+          skuName: 'Agrobest - 500 ml',
+          unit: 'Nos',
+          openingStock: 104,
+          ytdSales: 52,
+          liquidated: 21,
+          currentStock: 135,
+          unitPrice: 27.6
+        }
+      ]
+    },
+    {
+      productId: 'P003',
+      productCode: 'FGCMGM0098',
+      productName: 'Agropurna Mah Gr.2',
+      category: 'Micronutrient',
+      skus: [
+        {
+          skuCode: 'FGCMGM0098-250',
+          skuName: 'Agropurna Mah Gr.2 - 250 ml',
+          unit: 'Nos',
+          openingStock: 188,
+          ytdSales: 94,
+          liquidated: 38,
+          currentStock: 244,
+          unitPrice: 27.6
+        },
+        {
+          skuCode: 'FGCMGM0099-500',
+          skuName: 'Agropurna Mah Gr.2 - 500 ml',
+          unit: 'Nos',
+          openingStock: 135,
+          ytdSales: 67,
+          liquidated: 27,
+          currentStock: 175,
+          unitPrice: 27.6
+        }
+      ]
+    },
+    {
+      productId: 'P004',
+      productCode: 'FGCMGM0104',
+      productName: 'Samta Boron',
+      category: 'Super Speciality Fertilizer',
+      skus: [
+        {
+          skuCode: 'FGCMGM0104-250',
+          skuName: 'Samta Boron - 250 ml',
+          unit: 'Nos',
+          openingStock: 135,
+          ytdSales: 67,
+          liquidated: 27,
+          currentStock: 175,
+          unitPrice: 27.6
+        }
+      ]
+    }
+  ];
+
+  // Sample product data for verification
+  const [verificationProductData, setVerificationProductData] = useState<ProductData[]>([
+    {
+      productId: 'P001',
+      productCode: 'FGCMGM0092',
+      productName: 'Agrosatva',
+      category: 'Biostimulant',
+      skus: [
+        {
+          skuCode: 'FGCMGM0092-250',
+          skuName: 'Agrosatva - 250 ml',
+          unit: 'Nos',
+          openingStock: 167,
+          ytdSales: 83,
+          liquidated: 33,
+          currentStock: 217,
+          unitPrice: 27.6
+        },
+        {
+          skuCode: 'FGCMGM0091-500',
+          skuName: 'Agrosatva - 500 ml',
+          unit: 'Nos',
+          openingStock: 125,
+          ytdSales: 63,
+          liquidated: 25,
+          currentStock: 163,
+          unitPrice: 27.6
+        }
+      ]
+    },
+    {
+      productId: 'P002',
+      productCode: 'FGCMGM0095',
+      productName: 'Agrobest',
+      category: 'Biostimulant',
+      skus: [
+        {
+          skuCode: 'FGCMGM0095-250',
+          skuName: 'Agrobest - 250 ml',
+          unit: 'Nos',
+          openingStock: 146,
+          ytdSales: 73,
+          liquidated: 29,
+          currentStock: 190,
+          unitPrice: 27.6
+        },
+        {
+          skuCode: 'FGCMGM0096-500',
+          skuName: 'Agrobest - 500 ml',
+          unit: 'Nos',
+          openingStock: 104,
+          ytdSales: 52,
+          liquidated: 21,
+          currentStock: 135,
+          unitPrice: 27.6
+        }
+      ]
+    },
+    {
+      productId: 'P003',
+      productCode: 'FGCMGM0098',
+      productName: 'Agropurna Mah Gr.2',
+      category: 'Micronutrient',
+      skus: [
+        {
+          skuCode: 'FGCMGM0098-250',
+          skuName: 'Agropurna Mah Gr.2 - 250 ml',
+          unit: 'Nos',
+          openingStock: 188,
+          ytdSales: 94,
+          liquidated: 38,
+          currentStock: 244,
+          unitPrice: 27.6
+        },
+        {
+          skuCode: 'FGCMGM0099-500',
+          skuName: 'Agropurna Mah Gr.2 - 500 ml',
+          unit: 'Nos',
+          openingStock: 135,
+          ytdSales: 67,
+          liquidated: 27,
+          currentStock: 175,
+          unitPrice: 27.6
+        }
+      ]
+    },
+    {
+      productId: 'P004',
+      productCode: 'FGCMGM0104',
+      productName: 'Samta Boron',
+      category: 'Super Speciality Fertilizer',
+      skus: [
+        {
+          skuCode: 'FGCMGM0104-250',
+          skuName: 'Samta Boron - 250 ml',
+          unit: 'Nos',
+          openingStock: 135,
+          ytdSales: 67,
+          liquidated: 27,
+          currentStock: 175,
+          unitPrice: 27.6
+        }
+      ]
+    }
+  ]);
+
+  const getTransactionData = (skuCode: string): TransactionData[] => {
+    const transactions: Record<string, TransactionData[]> = {
+      'FGCMGM0092-250': [
+        { date: '10.04', type: 'Sale', quantity: 120, value: 0.27 },
+        { date: '24.04', type: 'Sale', quantity: 160, value: 0.36 },
+        { date: '08.05', type: 'Sale', quantity: 200, value: 0.45 }
+      ],
+      'FGCMGM0091-500': [
+        { date: '12.04', type: 'Sale', quantity: 100, value: 0.43 },
+        { date: '26.04', type: 'Sale', quantity: 120, value: 0.51 },
+        { date: '10.05', type: 'Sale', quantity: 140, value: 0.60 }
+      ],
+      'FGCMGM0093-1L': [
+        { date: '15.04', type: 'Sale', quantity: 80, value: 0.64 },
+        { date: '28.04', type: 'Sale', quantity: 100, value: 0.80 },
+        { date: '12.05', type: 'Sale', quantity: 60, value: 0.48 }
+      ],
+      'FGCMGM0098-250': [
+        { date: '08.04', type: 'Sale', quantity: 150, value: 0.30 },
+        { date: '22.04', type: 'Sale', quantity: 180, value: 0.36 },
+        { date: '06.05', type: 'Sale', quantity: 210, value: 0.42 }
+      ],
+      'FGCMGM0099-500': [
+        { date: '10.04', type: 'Sale', quantity: 130, value: 0.49 },
+        { date: '24.04', type: 'Sale', quantity: 140, value: 0.53 },
+        { date: '08.05', type: 'Sale', quantity: 120, value: 0.45 }
+      ],
+      'FGCMGM0100-1L': [
+        { date: '14.04', type: 'Sale', quantity: 90, value: 0.63 },
+        { date: '28.04', type: 'Sale', quantity: 105, value: 0.74 },
+        { date: '12.05', type: 'Sale', quantity: 75, value: 0.53 }
+      ],
+      'FGINVAG0001-5KG': [
+        { date: '12.04', type: 'Sale', quantity: 80, value: 0.32 },
+        { date: '26.04', type: 'Sale', quantity: 96, value: 0.38 },
+        { date: '10.05', type: 'Sale', quantity: 112, value: 0.45 }
+      ],
+      'FGINVAG0002-10KG': [
+        { date: '15.04', type: 'Sale', quantity: 70, value: 0.53 },
+        { date: '28.04', type: 'Sale', quantity: 84, value: 0.63 },
+        { date: '11.05', type: 'Sale', quantity: 62, value: 0.47 }
+      ],
+      'FGINVAG0009-25KG': [
+        { date: '18.04', type: 'Sale', quantity: 48, value: 0.84 },
+        { date: '02.05', type: 'Sale', quantity: 56, value: 0.98 },
+        { date: '16.05', type: 'Sale', quantity: 40, value: 0.70 }
+      ],
+      'FGINVAG0025-1L': [
+        { date: '20.04', type: 'Sale', quantity: 100, value: 0.70 },
+        { date: '04.05', type: 'Sale', quantity: 120, value: 0.84 },
+        { date: '18.05', type: 'Sale', quantity: 80, value: 0.56 }
+      ],
+      'FGINVAG0021-1L': [
+        { date: '16.04', type: 'Sale', quantity: 90, value: 0.72 },
+        { date: '30.04', type: 'Sale', quantity: 105, value: 0.84 },
+        { date: '14.05', type: 'Sale', quantity: 75, value: 0.60 }
+      ]
+    };
+    return transactions[skuCode] || [];
+  };
+
+  const getMetricData = (metric: string) => {
+    let title = '';
+    let subtitle = '';
+
+    switch (metric) {
+      case 'opening':
+        title = 'Opening Stock Details';
+        subtitle = 'Distributor wise opening stock breakdown';
+        break;
+      case 'sales':
+        title = 'YTD Net Sales Details';
+        subtitle = 'Distributor wise sales performance';
+        break;
+      case 'liquidation':
+        title = 'Liquidation Details';
+        subtitle = 'Distributor wise liquidation breakdown';
+        break;
+      case 'balance':
+        title = 'Balance Stock Details';
+        subtitle = 'Distributor wise remaining stock';
+        break;
+    }
+
+    const data = selectedDistributorId
+      ? filteredDistributors.filter(d => d.id === selectedDistributorId)
+      : filteredDistributors;
+
+    return { title, subtitle, data };
+  };
+
+  const handleMetricClick = (metric: string, distributorId: string | null = null) => {
+    setSelectedMetric(metric);
+    setSelectedDistributorId(distributorId);
+    setModalTab('details');
+    setShowDetailModal(true);
+  };
+
+  const generateVerificationLetter = () => {
+    const metricData = getMetricData(selectedMetric);
+    let skuList = '';
+    let index = 1;
+
+    metricData.data.forEach(product => {
+      skuList += `\nProduct: ${product.productName} (Code: ${product.productCode})\n`;
+      product.skus.forEach(sku => {
+        const originalBalance = sku.openingStock;
+        const updatedBalance = sku.currentStock;
+        const difference = originalBalance - updatedBalance;
+        const liquidated = sku.liquidated;
+
+        const movement = stockMovements[sku.skuCode];
+        let liquidationText = '';
+
+        if (difference > 0) {
+          if (movement?.type === 'retailer' && movement.retailerName) {
+            liquidationText = `Sold to Retailer: ${movement.retailerName} (${difference} ${sku.unit})`;
+          } else if (movement?.type === 'farmer') {
+            liquidationText = `Sold to Farmer (${difference} ${sku.unit})`;
+          } else if (liquidated > 0) {
+            liquidationText = `Sold to Farmer (${liquidated} ${sku.unit})`;
+          } else {
+            liquidationText = `Liquidation: ${difference} ${sku.unit}`;
+          }
+        }
+
+        skuList += `  ${index}. ${sku.skuName} (SKU: ${sku.skuCode})\n`;
+        skuList += `     Original Balance Stock: ${originalBalance} ${sku.unit}\n`;
+        skuList += `     Updated Balance Stock: ${updatedBalance} ${sku.unit}\n`;
+        skuList += `     Difference: ${difference} ${sku.unit}\n`;
+        if (liquidationText) {
+          skuList += `     ${liquidationText}\n`;
+        }
+        index++;
+      });
+    });
+
+    const userName = user?.name || 'User';
+    const userDesignation = user?.role || 'N/A';
+    const dealerName = 'SRI RAMA SEEDS AND PESTICIDES';
+    const dealerCode = '1325';
+    const outletName = 'Green Valley Outlet';
+    const today = new Date().toLocaleDateString('en-IN');
+    const currentDateTime = new Date().toLocaleString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true
+    });
+
+    return `To,
+Gencrest Team
+
+Subject: Verification of Current Stock
+
+I hereby confirm that I have verified the stock count for all SKUs done by ${userName}, ${userDesignation} on ${currentDateTime}, listed below at this outlet.
+The stock details as entered in the system are accurate and true to the best of my knowledge.
+I approve and acknowledge the same.
+
+SKU-wise Current Stock:
+${skuList}
+
+Dealer Name: ${dealerName}
+Dealer Code: ${dealerCode}
+Outlet Name: ${outletName}
+Date: ${today}
+
+
+_______________________________
+Dealer/Distributor Signature
+
+Name:
+Stamp:
+
+
+Visited and Liquidation done by:
+Name: ${userName}
+Designation: ${userDesignation}
+Date/Time: ${currentDateTime}`;
+  };
+
+  const downloadVerificationLetter = () => {
+    const letterContent = generateVerificationLetter();
+    const blob = new Blob([letterContent], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Stock_Verification_Letter_${new Date().getTime()}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const captureMetadata = () => {
+    const now = new Date();
+    const formattedDateTime = now.toLocaleString('en-IN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true
+    });
+
+    const locationStr = latitude && longitude
+      ? `Lat: ${latitude.toFixed(6)}, Long: ${longitude.toFixed(6)}`
+      : 'Location unavailable';
+
+    return {
+      capturedAt: formattedDateTime,
+      location: locationStr,
+      userName: user?.name || 'Unknown User',
+      designation: user?.role || 'Unknown',
+      latitude,
+      longitude
+    };
+  };
+
+  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const newProof: ProofData = {
+          id: `photo_${Date.now()}`,
+          type: 'photo',
+          name: file.name,
+          url: e.target?.result as string,
+          timestamp: new Date().toISOString(),
+          location: latitude && longitude ? {
+            latitude,
+            longitude,
+            accuracy: 5
+          } : undefined,
+          metadata: {
+            capturedAt: new Date().toLocaleString('en-IN', {
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit',
+              hour: '2-digit',
+              minute: '2-digit',
+              second: '2-digit',
+              timeZone: 'Asia/Kolkata'
+            }),
+            deviceInfo: navigator.userAgent.substring(0, 50),
+            capturedBy: user?.email || 'Unknown User',
+            userName: user?.email || 'Unknown',
+            designation: user?.role || 'Unknown',
+            fileSize: file.size / 1024 / 1024,
+            fileType: file.type
+          }
+        };
+        setUploadedProofs(prev => [...prev, newProof]);
+      };
+      reader.readAsDataURL(file);
+      event.target.value = '';
+    }
+  };
+
+  const handleClickPicture = async () => {
+    try {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'image/*';
+      input.capture = 'environment';
+      input.onchange = (e) => {
+        const file = (e.target as HTMLInputElement).files?.[0];
+        if (file) {
+          setVerificationLetter(file);
+          setVerificationMetadata(captureMetadata());
+        }
+      };
+      input.click();
+    } catch (error) {
+      console.error('Camera capture error:', error);
+    }
+  };
+
+  const handleCameraCapture = async () => {
+    try {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'image/*';
+      input.capture = 'user';
+      input.onchange = (e) => {
+        const file = (e.target as HTMLInputElement).files?.[0];
+        if (file) {
+          setVerificationLetter(file);
+          setVerificationMetadata(captureMetadata());
+        }
+      };
+      input.click();
+    } catch (error) {
+      console.error('Camera capture error:', error);
+    }
+  };
+
+  const handleSubmitVerification = () => {
+    if (!verificationLetter || !verificationMetadata) {
+      alert('Please upload or capture the verification letter');
+      return;
+    }
+
+    const submissionDetails = `
+Verification Submitted Successfully!
+
+File: ${verificationLetter.name}
+Size: ${(verificationLetter.size / 1024).toFixed(2)} KB
+
+Captured By: ${verificationMetadata.userName} (${verificationMetadata.designation})
+Date & Time: ${verificationMetadata.capturedAt}
+Location: ${verificationMetadata.location}
+    `.trim();
+
+    alert(submissionDetails);
+    setShowDetailModal(false);
+    setVerificationLetter(null);
+    setVerificationMetadata(null);
+    setModalTab('details');
+  };
+
+  const handleVerifyStock = () => {
+    setSelectedMetric('balance');
+    setShowVerifyModal(true);
+    setModalTab('details');
+  };
+
+  const toggleDistributorStats = (distributorId: string) => {
+    setExpandedDistributorStats(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(distributorId)) {
+        newSet.delete(distributorId);
+      } else {
+        newSet.add(distributorId);
+      }
+      return newSet;
+    });
+  };
+
+  const handle360View = (entity: any) => {
+    setSelected360Entity(entity);
+    setView360Tab('overview');
+    setShow360ViewModal(true);
+  };
+
+  const handleQuantityChange = (skuCode: string, newQuantity: number) => {
+    setSkuQuantities(prev => ({
+      ...prev,
+      [skuCode]: newQuantity
+    }));
+  };
+
+  const handleStockMovement = (skuCode: string, movement: {
+    type: 'farmer' | 'retailer' | 'return';
+    quantity: number;
+    retailerName?: string;
+    remarks?: string;
+  }) => {
+    setStockMovements(prev => ({
+      ...prev,
+      [skuCode]: movement
+    }));
+  };
+
+  const proceedToVerification = () => {
+    // Validate all quantities are entered
+    const allSKUs = verificationProductData.flatMap(p => p.skus);
+    const missingQuantities = allSKUs.filter(sku => 
+      skuQuantities[sku.skuCode] === undefined || skuQuantities[sku.skuCode] === null
+    );
+    
+    if (missingQuantities.length > 0) {
+      alert('Please enter current quantity for all SKUs');
+      return;
+    }
+    
+    setVerifyTab('verification');
+  };
+
+  const handleProofCapture = async (type: 'photo' | 'document') => {
+    setIsCapturing(true);
+    
+    try {
+      // Simulate capture/upload process
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      const newProof: ProofData = {
+        id: `proof_${Date.now()}`,
+        type,
+        name: type === 'photo' ? `Photo_${Date.now()}.jpg` : `Document_${Date.now()}.pdf`,
+        url: '/placeholder-image.jpg',
+        timestamp: new Date().toISOString(),
+        location: latitude && longitude ? {
+          latitude,
+          longitude,
+          accuracy: 5
+        } : undefined,
+        metadata: {
+          capturedAt: new Date().toLocaleString('en-IN', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            timeZone: 'Asia/Kolkata'
+          }),
+          deviceInfo: navigator.userAgent.substring(0, 50),
+          capturedBy: user?.email || 'Unknown User',
+          userName: user?.email || 'Unknown',
+          designation: user?.role || 'Unknown',
+          fileSize: type === 'photo' ? 2.5 : 1.8,
+          fileType: type === 'photo' ? 'image/jpeg' : 'application/pdf'
+        }
+      };
+      
+      setUploadedProofs(prev => [...prev, newProof]);
+      
+    } catch (error) {
+      alert('Failed to capture proof. Please try again.');
+    } finally {
+      setIsCapturing(false);
+    }
+  };
+
+  const handleESignature = () => {
+    setShowSignatureCapture(true);
+  };
+
+  const handleSaveSignature = (signatureData: string) => {
+    try {
+      const parsedData = JSON.parse(signatureData);
+
+      const signatureProof: ProofData = {
+        id: `signature_${Date.now()}`,
+        type: 'signature',
+        name: `E-Signature_${new Date().toLocaleString('en-IN', {
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit'
+        }).replace(/[/,:\s]/g, '_')}`,
+        url: parsedData.signature,
+        timestamp: parsedData.timestamp,
+        location: parsedData.location,
+        metadata: {
+          capturedAt: new Date().toLocaleString('en-IN', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            timeZone: 'Asia/Kolkata'
+          }),
+          deviceInfo: parsedData.metadata.deviceInfo,
+          capturedBy: user?.email || 'Unknown User',
+          userName: user?.email || 'Unknown',
+          designation: user?.role || 'Unknown'
+        }
+      };
+
+      setUploadedProofs(prev => [...prev, signatureProof]);
+      setShowSignatureCapture(false);
+    } catch (error) {
+      alert('Failed to save signature. Please try again.');
+    }
+  };
+
+  const handleSubmitProof = () => {
+    const geofenceCheck = isWithinGeofence();
+
+    if (!geofenceCheck.valid) {
+      alert(`❌ Location Verification Failed\n\n${geofenceCheck.message}\n\nYou must be at the outlet location to submit proof.`);
+      return;
+    }
+
+    if (!selectedVerificationMethod) {
+      alert('Please select a verification method');
+      return;
+    }
+
+    if (uploadedProofs.length === 0) {
+      alert('Please upload at least one proof');
+      return;
+    }
+
+    // Submit proof with all metadata
+    const submissionData = {
+      verificationMethod: selectedVerificationMethod,
+      proofs: uploadedProofs,
+      submittedAt: new Date().toISOString(),
+      submittedBy: user?.email || 'Unknown User',
+      submittedByRole: user?.role || 'Unknown',
+      location: latitude && longitude ? { latitude, longitude } : null,
+      outletLocation: OUTLET_LOCATION,
+      distanceFromOutlet: geofenceCheck.distance,
+      totalProofs: uploadedProofs.length
+    };
+
+    console.log('Proof submitted with metadata:', submissionData);
+
+    // Create detailed summary
+    const proofSummary = uploadedProofs.map((proof, index) => {
+      return `\n${index + 1}. ${proof.name}\n   Type: ${proof.type === 'signature' ? 'E-Signature' : 'Photo/Document'}\n   User: ${proof.metadata.userName || proof.metadata.capturedBy}\n   Role: ${proof.metadata.designation || 'N/A'}\n   Time: ${proof.metadata.capturedAt}\n   Location: ${proof.location ? `${proof.location.latitude.toFixed(4)}, ${proof.location.longitude.toFixed(4)}` : 'N/A'}`;
+    }).join('\n');
+
+    alert(`✓ Verification submitted successfully!\n\n${geofenceCheck.message}\n\nMethod: ${selectedVerificationMethod.toUpperCase()}\nTotal Proofs: ${uploadedProofs.length}\nSubmitted by: ${user?.email || 'Unknown'} (${user?.role || 'Unknown'})\nTimestamp: ${new Date().toLocaleString('en-IN')}\n${proofSummary}`);
+
+    // Reset and close modals
+    setShowVerifyModal(false);
+    setShowDetailModal(false);
+    setModalTab('details');
+    setSelectedVerificationMethod('');
+    setUploadedProofs([]);
+  };
+
+  const removeProof = (proofId: string) => {
+    setUploadedProofs(prev => prev.filter(proof => proof.id !== proofId));
+  };
+
+  return (
+    <div className="space-y-6 max-w-full overflow-x-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center space-x-3">
+          <button
+            onClick={() => navigate('/')}
+            className="p-2 hover:bg-gray-100 rounded-full transition-colors"
+          >
+            <ArrowLeft className="w-5 h-5" />
+          </button>
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Stock Liquidation</h1>
+            <p className="text-gray-600 mt-1">Track and manage stock liquidation across distributors & retailers</p>
+            <div className="flex items-center gap-3 mt-2">
+              <p className="text-sm text-gray-500">Last updated: {new Date().toLocaleDateString('en-IN')}</p>
+              {user && (
+                <span className="px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-xs font-medium">
+                  Viewing: {
+                    getDataScopeForRole(user.role) === 'territory' ? `${user.territory} (Territory)` :
+                    getDataScopeForRole(user.role) === 'state' ? `${user.state} (State)` :
+                    getDataScopeForRole(user.role) === 'zone' ? `${user.zone} (Zone)` :
+                    'All India'
+                  }
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Stock Liquidation Overview */}
+      <div className="bg-white rounded-xl p-6 shadow-lg">
+
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 md:gap-6 max-w-full">
+          <div 
+            className="bg-orange-50 rounded-xl p-6 border-l-4 border-orange-500 cursor-pointer hover:shadow-md transition-all duration-200"
+            onClick={() => handleMetricClick('opening')}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <div className="w-12 h-12 bg-orange-500 rounded-lg flex items-center justify-center">
+                <Package className="w-6 h-6 text-white" />
+              </div>
+            </div>
+            <h4 className="text-lg font-semibold text-gray-900 mb-2">Opening Stock</h4>
+            <div className="text-xs text-orange-600 mb-2">As on 1st April 2025</div>
+            <div className="text-3xl font-bold text-gray-900 mb-1">₹{filteredMetrics.openingStock.value.toFixed(2)}L</div>
+            <div className="text-sm text-gray-600">{filteredMetrics.openingStock.volume.toLocaleString()} units</div>
+          </div>
+
+          <div 
+            className="bg-blue-50 rounded-xl p-6 border-l-4 border-blue-500 cursor-pointer hover:shadow-md transition-all duration-200"
+            onClick={() => handleMetricClick('sales')}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <div className="w-12 h-12 bg-blue-500 rounded-lg flex items-center justify-center">
+                <TrendingUp className="w-6 h-6 text-white" />
+              </div>
+            </div>
+            <h4 className="text-lg font-semibold text-gray-900 mb-2">YTD Net Sales</h4>
+            <div className="text-3xl font-bold text-gray-900 mb-1">₹{filteredMetrics.ytdNetSales.value.toFixed(2)}L</div>
+            <div className="text-sm text-gray-600">{filteredMetrics.ytdNetSales.volume.toLocaleString()} units</div>
+          </div>
+
+          <div 
+            className="bg-green-50 rounded-xl p-6 border-l-4 border-green-500 cursor-pointer hover:shadow-md transition-all duration-200"
+            onClick={() => handleMetricClick('liquidation')}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <div className="w-12 h-12 bg-green-500 rounded-lg flex items-center justify-center">
+                <Droplets className="w-6 h-6 text-white" />
+              </div>
+            </div>
+            <h4 className="text-lg font-semibold text-gray-900 mb-2">Liquidation</h4>
+            <div className="text-3xl font-bold text-gray-900 mb-1">₹{filteredMetrics.liquidation.value.toFixed(2)}L</div>
+            <div className="text-sm text-gray-600">{filteredMetrics.liquidation.volume.toLocaleString()} units</div>
+          </div>
+
+          <div 
+            className="bg-purple-50 rounded-xl p-6 border-l-4 border-purple-500 cursor-pointer hover:shadow-md transition-all duration-200"
+            onClick={() => handleMetricClick('balance')}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <div className="w-12 h-12 bg-purple-500 rounded-lg flex items-center justify-center">
+                <Target className="w-6 h-6 text-white" />
+              </div>
+            </div>
+            <h4 className="text-lg font-semibold text-gray-900 mb-2">Balance Stock</h4>
+            <div className="text-3xl font-bold text-gray-900 mb-1">₹{filteredMetrics.balanceStock.value.toFixed(2)}L</div>
+            <div className="text-sm text-gray-600">{filteredMetrics.balanceStock.volume.toLocaleString()} units</div>
+          </div>
+        </div>
+
+        {/* Liquidation Rate */}
+        <div className="mt-6 bg-gray-50 rounded-xl p-6">
+          <div className="flex justify-between items-center mb-4">
+            <h4 className="text-lg font-semibold text-gray-900">Overall Liquidation Rate</h4>
+            <span className={`px-4 py-2 rounded-full text-lg font-bold ${
+              filteredMetrics.liquidationPercentage >= 50 ? 'bg-green-100 text-green-800' :
+              filteredMetrics.liquidationPercentage >= 30 ? 'bg-yellow-100 text-yellow-800' :
+              'bg-red-100 text-red-800'
+            }`}>
+              {filteredMetrics.liquidationPercentage}%
+            </span>
+          </div>
+          <div className="w-full bg-gray-200 rounded-full h-4">
+            <div 
+              className="bg-gradient-to-r from-purple-500 to-blue-500 h-4 rounded-full transition-all duration-500" 
+              style={{ width: `${Math.min(100, filteredMetrics.liquidationPercentage)}%` }}
+            ></div>
+          </div>
+          <div className="flex justify-between text-sm text-gray-600 mt-2">
+            <span>0%</span>
+            <span>Target: 50%</span>
+            <span>100%</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Distributors/Retailers List */}
+      {/* Search and Filters */}
+      <div className="bg-white rounded-xl p-6 shadow-lg">
+        <div className="mb-4">
+          <h2 className="text-xl font-bold text-gray-900 mb-4">
+            {searchType === 'distributor' ? 'Distributor' : 'Retailer'} Entries
+          </h2>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 md:gap-4 mb-6 max-w-full">
+          <select
+            value={searchType}
+            onChange={(e) => {
+              setSearchType(e.target.value as 'distributor' | 'retailer');
+              setSearchQuery('');
+            }}
+            className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent font-medium"
+          >
+            <option value="distributor">Distributor</option>
+            <option value="retailer">Retailer</option>
+          </select>
+
+          <div className="relative">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder={`Search ${searchType}s...`}
+              className="w-full pl-4 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+            />
+          </div>
+
+          <select className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent">
+            <option value="">All Status</option>
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+          </select>
+
+          <select className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent">
+            <option value="">All Priority</option>
+            <option value="high">High</option>
+            <option value="medium">Medium</option>
+            <option value="low">Low</option>
+          </select>
+        </div>
+
+        {/* Distributor/Retailer Cards */}
+        <div className="space-y-6">
+          {(searchType === 'distributor' ?
+            filteredDistributors.filter(d =>
+              !searchQuery ||
+              d.distributorName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+              d.distributorCode.toLowerCase().includes(searchQuery.toLowerCase()) ||
+              d.territory.toLowerCase().includes(searchQuery.toLowerCase())
+            ) :
+            retailerMetrics.filter(r =>
+              !searchQuery ||
+              r.retailerName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+              r.retailerCode.toLowerCase().includes(searchQuery.toLowerCase()) ||
+              r.territory.toLowerCase().includes(searchQuery.toLowerCase())
+            )
+          ).map((distributor) => (
+            <div key={distributor.id} className="border border-gray-200 rounded-xl p-6 hover:shadow-md transition-shadow">
+              {/* Distributor/Retailer Header */}
+              <div className="flex items-start justify-between mb-6">
+                <div className="flex items-start space-x-4">
+                  <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center">
+                    <Building className="w-6 h-6 text-purple-600" />
+                  </div>
+                  <div>
+                    <button
+                      onClick={() => handle360View(distributor)}
+                      className="text-xl font-bold text-blue-600 hover:text-blue-800 transition-colors text-left underline decoration-2 decoration-blue-300 hover:decoration-blue-500 flex items-center gap-2"
+                    >
+                      {(distributor as any).distributorName || (distributor as any).retailerName}
+                      <Eye className="w-5 h-5" />
+                    </button>
+                    <div className="flex items-center space-x-2 mt-1 text-sm text-gray-600">
+                      <span className="text-blue-600 font-semibold">
+                        {(distributor as any).distributorCode || (distributor as any).retailerCode}
+                      </span>
+                      <span className="text-gray-400">•</span>
+                      <div className="flex items-center space-x-1">
+                        <MapPin className="w-4 h-4" />
+                        <span>Territory: {distributor.territory}</span>
+                      </div>
+                      <span className="text-gray-400">•</span>
+                      <div className="flex items-center space-x-1">
+                        <Calendar className="w-4 h-4" />
+                        <span>Updated: {new Date(distributor.metrics.lastUpdated).toLocaleDateString('en-IN')}</span>
+                      </div>
+                    </div>
+                    {searchType === 'retailer' && (distributor as any).linkedDistributors && (
+                      <div className="mt-2">
+                        <span className="text-sm font-medium text-purple-600">
+                          Linked to {(distributor as any).linkedDistributors.length} distributor(s):
+                        </span>
+                        <p className="text-xs text-gray-600 mt-1">
+                          {(distributor as any).linkedDistributors.join(', ')}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+                    distributor.status === 'Active' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
+                  }`}>
+                    {distributor.status}
+                  </span>
+                  <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+                    distributor.priority === 'High' ? 'bg-red-100 text-red-800' :
+                    distributor.priority === 'Medium' ? 'bg-yellow-100 text-yellow-800' :
+                    'bg-blue-100 text-blue-800'
+                  }`}>
+                    {distributor.priority}
+                  </span>
+                </div>
+              </div>
+
+              {/* Stats Grid - Desktop */}
+              <div className="hidden md:grid md:grid-cols-4 gap-4 mb-4">
+                <div className="bg-orange-50 rounded-lg p-4 border border-orange-200">
+                  <h4 className="text-sm font-medium text-orange-800 mb-2">Opening Stock</h4>
+                  <div className="mb-1">
+                    <span className="text-xs text-orange-600">Value</span>
+                  </div>
+                  <div className="text-2xl font-bold text-orange-900">
+                    ₹{distributor.metrics.openingStock.value.toFixed(2)}L
+                  </div>
+                  <button
+                    className="mt-3 w-full flex items-center justify-center space-x-2 text-orange-700 hover:text-orange-900 text-sm font-medium"
+                    onClick={() => handleMetricClick('opening', distributor.id)}
+                  >
+                    <Eye className="w-4 h-4" />
+                    <span>View Details</span>
+                  </button>
+                </div>
+
+                <div className="bg-blue-50 rounded-lg p-4 border border-blue-200">
+                  <h4 className="text-sm font-medium text-blue-800 mb-2">YTD Net Sales</h4>
+                  <div className="mb-1">
+                    <span className="text-xs text-blue-600">Value</span>
+                  </div>
+                  <div className="text-2xl font-bold text-blue-900">
+                    ₹{distributor.metrics.ytdNetSales.value.toFixed(2)}L
+                  </div>
+                  <button
+                    className="mt-3 w-full flex items-center justify-center space-x-2 text-blue-700 hover:text-blue-900 text-sm font-medium"
+                    onClick={() => handleMetricClick('sales', distributor.id)}
+                  >
+                    <Eye className="w-4 h-4" />
+                    <span>View Details</span>
+                  </button>
+                </div>
+
+                <div className="bg-green-50 rounded-lg p-4 border border-green-200">
+                  <h4 className="text-sm font-medium text-green-800 mb-2">Liquidation</h4>
+                  <div className="mb-1">
+                    <span className="text-xs text-green-600">Value</span>
+                  </div>
+                  <div className="text-2xl font-bold text-green-900">
+                    ₹{distributor.metrics.liquidation.value.toFixed(2)}L
+                  </div>
+                  <button
+                    className="mt-3 w-full flex items-center justify-center space-x-2 text-green-700 hover:text-green-900 text-sm font-medium"
+                    onClick={() => handleMetricClick('liquidation', distributor.id)}
+                  >
+                    <Eye className="w-4 h-4" />
+                    <span>View Details</span>
+                  </button>
+                </div>
+
+                <div className="bg-purple-50 rounded-lg p-4 border border-purple-200">
+                  <h4 className="text-sm font-medium text-purple-800 mb-2">Balance Stock</h4>
+                  <div className="mb-1">
+                    <span className="text-xs text-purple-600">Value</span>
+                  </div>
+                  <div className="text-2xl font-bold text-purple-900">
+                    ₹{distributor.metrics.balanceStock.value.toFixed(2)}L
+                  </div>
+                  <button
+                    className="mt-3 w-full flex items-center justify-center space-x-2 bg-green-600 text-white rounded-lg py-2 hover:bg-green-700 transition-colors text-sm font-medium"
+                    onClick={handleVerifyStock}
+                  >
+                    <CheckCircle className="w-4 h-4" />
+                    <span>Verify Stock</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Stats Accordion - Mobile */}
+              <div className="md:hidden mb-4">
+                <button
+                  onClick={() => toggleDistributorStats(distributor.id)}
+                  className="w-full bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg p-4 flex items-center justify-between hover:from-blue-700 hover:to-blue-800 transition-all"
+                >
+                  <div className="flex items-center space-x-3">
+                    <Package className="w-5 h-5" />
+                    <span className="font-semibold">View Stock Details</span>
+                  </div>
+                  <ChevronDown className={`w-5 h-5 transition-transform ${expandedDistributorStats.has(distributor.id) ? 'rotate-180' : ''}`} />
+                </button>
+
+                {expandedDistributorStats.has(distributor.id) && (
+                  <div className="mt-2 space-y-2">
+                    <div className="bg-orange-50 rounded-lg p-4 border border-orange-200">
+                      <h4 className="text-sm font-medium text-orange-800 mb-2">Opening Stock</h4>
+                      <div className="mb-1">
+                        <span className="text-xs text-orange-600">Value</span>
+                      </div>
+                      <div className="text-2xl font-bold text-orange-900">
+                        ₹{distributor.metrics.openingStock.value.toFixed(2)}L
+                      </div>
+                      <button
+                        className="mt-3 w-full flex items-center justify-center space-x-2 text-orange-700 hover:text-orange-900 text-sm font-medium"
+                        onClick={() => handleMetricClick('opening')}
+                      >
+                        <Eye className="w-4 h-4" />
+                        <span>View Details</span>
+                      </button>
+                    </div>
+
+                    <div className="bg-blue-50 rounded-lg p-4 border border-blue-200">
+                      <h4 className="text-sm font-medium text-blue-800 mb-2">YTD Net Sales</h4>
+                      <div className="mb-1">
+                        <span className="text-xs text-blue-600">Value</span>
+                      </div>
+                      <div className="text-2xl font-bold text-blue-900">
+                        ₹{distributor.metrics.ytdNetSales.value.toFixed(2)}L
+                      </div>
+                      <button
+                        className="mt-3 w-full flex items-center justify-center space-x-2 text-blue-700 hover:text-blue-900 text-sm font-medium"
+                        onClick={() => handleMetricClick('sales')}
+                      >
+                        <Eye className="w-4 h-4" />
+                        <span>View Details</span>
+                      </button>
+                    </div>
+
+                    <div className="bg-green-50 rounded-lg p-4 border border-green-200">
+                      <h4 className="text-sm font-medium text-green-800 mb-2">Liquidation</h4>
+                      <div className="mb-1">
+                        <span className="text-xs text-green-600">Value</span>
+                      </div>
+                      <div className="text-2xl font-bold text-green-900">
+                        ₹{distributor.metrics.liquidation.value.toFixed(2)}L
+                      </div>
+                      <button
+                        className="mt-3 w-full flex items-center justify-center space-x-2 text-green-700 hover:text-green-900 text-sm font-medium"
+                        onClick={() => handleMetricClick('liquidation')}
+                      >
+                        <Eye className="w-4 h-4" />
+                        <span>View Details</span>
+                      </button>
+                    </div>
+
+                    <div className="bg-purple-50 rounded-lg p-4 border border-purple-200">
+                      <h4 className="text-sm font-medium text-purple-800 mb-2">Balance Stock</h4>
+                      <div className="mb-1">
+                        <span className="text-xs text-purple-600">Value</span>
+                      </div>
+                      <div className="text-2xl font-bold text-purple-900">
+                        ₹{distributor.metrics.balanceStock.value.toFixed(2)}L
+                      </div>
+                      <button
+                        className="mt-3 w-full flex items-center justify-center space-x-2 bg-green-600 text-white rounded-lg py-2 hover:bg-green-700 transition-colors text-sm font-medium"
+                        onClick={handleVerifyStock}
+                      >
+                        <CheckCircle className="w-4 h-4" />
+                        <span>Verify Stock</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Liquidation Rate Bar */}
+              <div className="bg-gray-50 rounded-lg p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-medium text-gray-700">Liquidation Rate</span>
+                  <span className={`text-lg font-bold ${
+                    distributor.metrics.liquidationPercentage >= 50 ? 'text-green-600' :
+                    distributor.metrics.liquidationPercentage >= 30 ? 'text-yellow-600' :
+                    'text-red-600'
+                  }`}>
+                    {distributor.metrics.liquidationPercentage}%
+                  </span>
+                </div>
+                <div className="w-full bg-gray-200 rounded-full h-3">
+                  <div
+                    className={`h-3 rounded-full transition-all duration-500 ${
+                      distributor.metrics.liquidationPercentage >= 50 ? 'bg-gradient-to-r from-green-500 to-teal-500' :
+                      distributor.metrics.liquidationPercentage >= 30 ? 'bg-gradient-to-r from-yellow-500 to-orange-500' :
+                      'bg-gradient-to-r from-red-500 to-pink-500'
+                    }`}
+                    style={{ width: `${Math.min(100, distributor.metrics.liquidationPercentage)}%` }}
+                  ></div>
+                </div>
+                <div className="flex justify-between text-xs text-gray-600 mt-1">
+                  <span>0%</span>
+                  <span>Target: 50%</span>
+                  <span>100%</span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Detail Modal */}
+      {showDetailModal && selectedMetric && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-0 sm:p-4">
+          <div className="bg-white rounded-none sm:rounded-xl w-screen sm:w-full sm:max-w-5xl h-full sm:h-auto sm:max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="border-b border-gray-200">
+              <div className="p-3 sm:p-6 pb-0">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-col gap-3">
+                      <div>
+                        <h2 className="text-lg sm:text-2xl font-bold text-gray-900">{getMetricData(selectedMetric).title}</h2>
+                        <p className="text-gray-600 mt-1 text-xs sm:text-base">{getMetricData(selectedMetric).subtitle}</p>
+                      </div>
+                    <div className="bg-orange-50 border-2 border-orange-400 rounded-xl px-3 sm:px-6 py-2 sm:py-3 text-center w-fit">
+                      <div className="text-xl sm:text-3xl font-bold text-orange-900">
+                        ₹{(() => {
+                          const distributors = getMetricData(selectedMetric).data;
+                          const total = distributors.reduce((sum, dist) => {
+                            if (selectedMetric === 'opening') return sum + dist.metrics.openingStock.value;
+                            if (selectedMetric === 'sales') return sum + dist.metrics.ytdNetSales.value;
+                            if (selectedMetric === 'liquidation') return sum + dist.metrics.liquidation.value;
+                            if (selectedMetric === 'balance') return sum + dist.metrics.balanceStock.value;
+                            return sum;
+                          }, 0);
+                          return total.toFixed(2);
+                        })()}L
+                      </div>
+                      <div className="text-xs text-orange-600 mt-1">Total {selectedMetric === 'liquidation' ? 'Liquidation' : selectedMetric === 'opening' ? 'Opening Stock' : selectedMetric === 'sales' ? 'Sales' : 'Balance'}</div>
+                    </div>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    setShowDetailModal(false);
+                    setModalTab('details');
+                    setVerificationLetter(null);
+                    setShowLetterPreview(false);
+                    setSelectedDistributorId(null);
+                  }}
+                  className="ml-2 sm:ml-4 p-2 hover:bg-gray-100 rounded-full transition-colors flex-shrink-0"
+                >
+                  <X className="w-5 h-5 sm:w-6 sm:h-6" />
+                </button>
+              </div>
+
+              <div className="mt-3 sm:mt-4 flex flex-wrap items-center gap-1 sm:gap-2 text-xs sm:text-sm text-gray-600 overflow-hidden">
+                <Building className="w-3 h-3 sm:w-4 sm:h-4 flex-shrink-0" />
+                {selectedDistributorId ? (
+                  <>
+                    {(() => {
+                      const dist = filteredDistributors.find(d => d.id === selectedDistributorId);
+                      return dist ? (
+                        <>
+                          <span className="font-semibold truncate">{dist.distributorName}</span>
+                          <span className="hidden sm:inline flex-shrink-0">•</span>
+                          <span className="flex-shrink-0">Code: {dist.distributorCode}</span>
+                          <span className="hidden sm:inline flex-shrink-0">•</span>
+                          <MapPin className="w-3 h-3 sm:w-4 sm:h-4 flex-shrink-0" />
+                          <span className="hidden sm:inline truncate">{dist.territory}, {dist.state}</span>
+                          <span className="sm:hidden flex-shrink-0">{dist.territory}</span>
+                        </>
+                      ) : null;
+                    })()}
+                  </>
+                ) : (
+                  <>
+                    <span className="font-semibold truncate">All Distributors</span>
+                    <span className="hidden sm:inline flex-shrink-0">•</span>
+                    <span className="flex-shrink-0">Total: {filteredDistributors.length} distributor{filteredDistributors.length !== 1 ? 's' : ''}</span>
+                    <span className="hidden sm:inline flex-shrink-0">•</span>
+                    <MapPin className="w-3 h-3 sm:w-4 sm:h-4 flex-shrink-0" />
+                    <span className="hidden sm:inline truncate">Viewing: {user?.territory || user?.state || user?.zone || 'All Territories'}</span>
+                    <span className="sm:hidden flex-shrink-0">{user?.territory || 'All'}</span>
+                  </>
+                )}
+              </div>
+              </div>
+
+              {/* Tabs */}
+              <div className="flex border-b border-gray-200 px-3 sm:px-6 overflow-x-auto scrollbar-hide">
+                <button
+                  className="flex-shrink-0 px-4 sm:px-6 py-3 font-semibold text-xs sm:text-sm transition-colors relative whitespace-nowrap text-gray-900 border-b-2 border-orange-500"
+                >
+                  PRODUCT & SKU WISE BREAKDOWN
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-3 sm:p-6">
+                <>
+                  <h3 className="text-base sm:text-lg font-semibold text-gray-900 mb-4">Product & SKU Breakdown</h3>
+                  <div className="space-y-3">
+                    {verificationProductData.map((product) => {
+                      const getProductMetric = (metric: string) => {
+                        return product.skus.reduce((sum, sku) => {
+                          if (metric === 'opening') return sum + sku.openingStock;
+                          if (metric === 'sales') return sum + sku.ytdSales;
+                          if (metric === 'liquidation') return sum + sku.liquidated;
+                          if (metric === 'balance') return sum + sku.currentStock;
+                          return sum;
+                        }, 0);
+                      };
+
+                      const productTotal = getProductMetric(selectedMetric);
+                      const productValue = product.skus.reduce((sum, sku) => {
+                        let quantity = 0;
+                        if (selectedMetric === 'opening') quantity = sku.openingStock;
+                        else if (selectedMetric === 'sales') quantity = sku.ytdSales;
+                        else if (selectedMetric === 'liquidation') quantity = sku.liquidated;
+                        else if (selectedMetric === 'balance') quantity = sku.currentStock;
+                        return sum + (quantity * sku.unitPrice);
+                      }, 0);
+
+                      return (
+                        <div key={product.productId} className="border border-gray-200 rounded-lg overflow-hidden">
+                          <div
+                            className="flex items-center justify-between bg-gradient-to-r from-orange-400 to-orange-500 p-3 sm:p-4 text-white cursor-pointer hover:from-orange-500 hover:to-orange-600 transition-all"
+                            onClick={() => toggleProduct(product.productId)}
+                          >
+                            <div className="flex-1">
+                              <h4 className="font-semibold text-sm sm:text-base">{product.productName}</h4>
+                              <p className="text-xs opacity-90 mt-0.5">Code: {product.productCode} • Category: {product.category}</p>
+                            </div>
+                            <div className="text-right mr-3">
+                              <div className="text-base sm:text-lg font-bold">₹{productValue.toLocaleString()}</div>
+                              <div className="text-xs opacity-90">{productTotal.toLocaleString()} units</div>
+                            </div>
+                            {expandedProducts.has(product.productId) ? (
+                              <ChevronUp className="w-5 h-5" />
+                            ) : (
+                              <ChevronDown className="w-5 h-5" />
+                            )}
+                          </div>
+
+                          {expandedProducts.has(product.productId) && (
+                            <div className="bg-white">
+                              {product.skus.map((sku) => {
+                                let skuQuantity = 0;
+                                if (selectedMetric === 'opening') skuQuantity = sku.openingStock;
+                                else if (selectedMetric === 'sales') skuQuantity = sku.ytdSales;
+                                else if (selectedMetric === 'liquidation') skuQuantity = sku.liquidated;
+                                else if (selectedMetric === 'balance') skuQuantity = sku.currentStock;
+
+                                const skuValue = skuQuantity * sku.unitPrice;
+                                const transactions = getTransactionData(sku.skuCode);
+
+                                return (
+                                  <div key={sku.skuCode} className="border-t border-gray-200">
+                                    <div
+                                      className="p-3 sm:p-4 hover:bg-gray-50 transition-colors cursor-pointer"
+                                      onClick={() => toggleSKU(sku.skuCode)}
+                                    >
+                                      <div className="flex items-center justify-between">
+                                        <div className="flex-1 min-w-0">
+                                          <h5 className="font-semibold text-gray-900 text-sm sm:text-base truncate">{sku.skuName}</h5>
+                                          <p className="text-xs sm:text-sm text-gray-600 mt-0.5">SKU: {sku.skuCode} • Unit Price: ₹{sku.unitPrice}/{sku.unit}</p>
+                                        </div>
+                                        <div className="text-right ml-4 flex-shrink-0 flex items-center gap-2">
+                                          <div>
+                                            <div className="text-sm sm:text-base font-bold text-gray-900">₹{skuValue.toLocaleString()}</div>
+                                            <div className="text-xs sm:text-sm text-gray-600">{skuQuantity.toLocaleString()} {sku.unit}</div>
+                                          </div>
+                                          {expandedSKUs.has(sku.skuCode) ? (
+                                            <ChevronUp className="w-4 h-4 text-gray-500" />
+                                          ) : (
+                                            <ChevronDown className="w-4 h-4 text-gray-500" />
+                                          )}
+                                        </div>
+                                      </div>
+                                    </div>
+
+                                    {expandedSKUs.has(sku.skuCode) && transactions.length > 0 && (
+                                      <div className="bg-gray-50 border-t border-gray-200">
+                                        <div className="px-3 sm:px-4 py-2 bg-gray-100">
+                                          <h6 className="text-xs font-semibold text-gray-700 uppercase">Invoice-wise Transaction History</h6>
+                                        </div>
+                                        <div className="overflow-x-auto">
+                                          <table className="w-full text-xs sm:text-sm">
+                                            <thead className="bg-gray-100">
+                                              <tr>
+                                                <th className="px-3 sm:px-4 py-2 text-left font-semibold text-gray-700">Invoice Date</th>
+                                                <th className="px-3 sm:px-4 py-2 text-center font-semibold text-gray-700">Sale/Return</th>
+                                                <th className="px-3 sm:px-4 py-2 text-right font-semibold text-gray-700">Quantity</th>
+                                                <th className="px-3 sm:px-4 py-2 text-right font-semibold text-gray-700">Value</th>
+                                              </tr>
+                                            </thead>
+                                            <tbody className="bg-white divide-y divide-gray-200">
+                                              {transactions.map((txn, idx) => (
+                                                <tr key={idx} className="hover:bg-gray-50">
+                                                  <td className="px-3 sm:px-4 py-2 text-left text-gray-900">{txn.date}</td>
+                                                  <td className="px-3 sm:px-4 py-2 text-center">
+                                                    <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${
+                                                      txn.type === 'Sale' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                                                    }`}>
+                                                      {txn.type}
+                                                    </span>
+                                                  </td>
+                                                  <td className="px-3 sm:px-4 py-2 text-right font-medium text-gray-900">
+                                                    {txn.type === 'Sale' ? '+' : '-'}{txn.quantity}
+                                                  </td>
+                                                  <td className="px-3 sm:px-4 py-2 text-right font-medium text-gray-900">₹{txn.value}L</td>
+                                                </tr>
+                                              ))}
+                                              <tr className="bg-gray-100 font-bold">
+                                                <td colSpan={2} className="px-3 sm:px-4 py-2 text-left text-gray-900">Liquidation Total:</td>
+                                                <td className="px-3 sm:px-4 py-2 text-right text-gray-900">
+                                                  {transactions.reduce((sum, txn) => sum + txn.quantity, 0)}
+                                                </td>
+                                                <td className="px-3 sm:px-4 py-2 text-right text-gray-900">
+                                                  ₹{transactions.reduce((sum, txn) => sum + txn.value, 0).toFixed(2)}L
+                                                </td>
+                                              </tr>
+                                            </tbody>
+                                          </table>
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Verify Stock Modal - with Submit Proof tab */}
+      {showVerifyModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-0 sm:p-4">
+          <div className="bg-white w-full h-full sm:h-auto sm:rounded-xl sm:shadow-2xl sm:max-w-6xl sm:max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="flex-shrink-0">
+              <div className="flex items-center justify-between p-3 sm:p-6 border-b border-gray-200 bg-white">
+                <div>
+                  <h2 className="text-lg sm:text-2xl font-bold text-gray-900">Verify Stock</h2>
+                  <p className="text-xs sm:text-sm text-gray-600 mt-1">Outlet details and transaction history</p>
+                </div>
+                <button
+                  onClick={() => {
+                    setShowVerifyModal(false);
+                    setModalTab('details');
+                    setSelectedVerificationMethod('');
+                    setUploadedProofs([]);
+                  }}
+                  className="text-gray-500 hover:text-gray-700 p-2"
+                >
+                  <X className="w-5 h-5 sm:w-6 sm:h-6" />
+                </button>
+              </div>
+
+              <div className="bg-orange-50 px-3 sm:px-6 py-3 sm:py-4 border-b border-orange-200">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-1 sm:gap-3 text-xs sm:text-sm text-orange-900 flex-1 min-w-0">
+                    <Building2 className="w-3 h-3 sm:w-4 sm:h-4 flex-shrink-0" />
+                    <span className="hidden sm:inline truncate">SRI RAMA SEEDS AND PESTICIDES</span>
+                    <span className="sm:hidden flex-shrink-0">SRI RAMA</span>
+                    <span className="hidden sm:inline flex-shrink-0">•</span>
+                    <Hash className="w-3 h-3 sm:w-4 sm:h-4 flex-shrink-0" />
+                    <span className="flex-shrink-0">Code: 1325</span>
+                    <span className="hidden sm:inline flex-shrink-0">•</span>
+                    <MapPin className="w-3 h-3 sm:w-4 sm:h-4 flex-shrink-0" />
+                    <span className="hidden sm:inline truncate">Green Valley, Delhi NCR, North Zone, Delhi</span>
+                    <span className="sm:hidden flex-shrink-0">Green Valley</span>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <div className="text-2xl sm:text-3xl font-bold text-orange-900">
+                      ₹{((verificationProductData.reduce((sum, product) => {
+                        return sum + product.skus.reduce((skuSum, sku) => skuSum + (sku.currentStock * sku.unitPrice), 0);
+                      }, 0)) / 1000).toFixed(2)}L
+                    </div>
+                    <div className="text-xs text-orange-600 mt-1">Total Opening Stock</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Tabs */}
+              <div className="flex border-b border-gray-200 px-3 sm:px-6 overflow-x-auto scrollbar-hide">
+                <button
+                  className={`flex-shrink-0 px-4 sm:px-6 py-3 font-semibold text-xs sm:text-sm transition-colors relative whitespace-nowrap ${
+                    modalTab === 'details'
+                      ? 'text-gray-900 border-b-2 border-orange-500'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                  onClick={() => setModalTab('details')}
+                >
+                  SKU WISE VERIFY
+                </button>
+                <button
+                  className={`flex-shrink-0 px-4 sm:px-6 py-3 font-semibold text-xs sm:text-sm transition-colors relative whitespace-nowrap ${
+                    modalTab === 'verify'
+                      ? 'text-gray-900 border-b-2 border-orange-500'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                  onClick={() => setModalTab('verify')}
+                >
+                  Submit Proof
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-3 sm:p-6">
+              {modalTab === 'details' ? (
+                <>
+                  <h3 className="text-base sm:text-lg font-semibold text-gray-900 mb-4">Product & SKU Breakdown</h3>
+                  <div className="space-y-3">
+                    {verificationProductData.map((product) => {
+                  const productTotal = product.skus.reduce((sum, sku) => sum + sku.currentStock, 0);
+                  const productValue = product.skus.reduce((sum, sku) => sum + (sku.currentStock * sku.unitPrice), 0);
+
+                  return (
+                    <div key={product.productId} className="border border-gray-200 rounded-lg overflow-hidden">
+                      <div
+                        className="flex items-center justify-between bg-gradient-to-r from-orange-400 to-orange-500 p-3 sm:p-4 text-white cursor-pointer hover:from-orange-500 hover:to-orange-600 transition-all"
+                        onClick={() => toggleProduct(product.productId)}
+                      >
+                        <div className="flex-1">
+                          <h4 className="font-semibold text-sm sm:text-base">{product.productName}</h4>
+                          <p className="text-xs opacity-90 mt-0.5">Code: {product.productCode}</p>
+                        </div>
+                        <div className="text-right mr-3">
+                          <div className="text-base sm:text-lg font-bold">₹{productValue.toLocaleString()}</div>
+                          <div className="text-xs opacity-90">{productTotal.toLocaleString()} units</div>
+                        </div>
+                        {expandedProducts.has(product.productId) ? (
+                          <ChevronUp className="w-5 h-5" />
+                        ) : (
+                          <ChevronDown className="w-5 h-5" />
+                        )}
+                      </div>
+
+                      {expandedProducts.has(product.productId) && (
+                        <div className="bg-white">
+                          {product.skus.map((sku) => (
+                            <div key={sku.skuCode} className="border-t border-gray-200">
+                              <div
+                                className="flex items-center justify-between p-3 sm:p-4 cursor-pointer hover:bg-gray-50 transition-colors"
+                                onClick={() => toggleSKU(sku.skuCode)}
+                              >
+                                <div className="flex-1">
+                                  <div className="font-medium text-sm text-gray-900">{sku.name}</div>
+                                  <div className="text-xs text-gray-600 mt-1">SKU: {sku.skuCode}</div>
+                                </div>
+                                <div className="text-right mr-3">
+                                  <div className="text-sm font-bold text-gray-900">₹{(sku.currentStock * sku.unitPrice).toLocaleString()}</div>
+                                  <div className="text-xs text-gray-600">{sku.currentStock} {sku.unit}</div>
+                                </div>
+                                {expandedSKUs.has(sku.skuCode) ? (
+                                  <ChevronUp className="w-4 h-4 text-gray-400" />
+                                ) : (
+                                  <ChevronDown className="w-4 h-4 text-gray-400" />
+                                )}
+                              </div>
+
+                              {expandedSKUs.has(sku.skuCode) && (
+                                <div className="px-3 sm:px-6 pb-4 bg-gray-50">
+                                  {/* Stock Update Section */}
+                                  <div className="mt-4 pt-4 border-t border-gray-300">
+                                    <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
+                                      <div className="flex items-center justify-between mb-3">
+                                        <h4 className="font-semibold text-purple-900">Update Current Stock</h4>
+                                        {(() => {
+                                          const check = isWithinGeofence();
+                                          return (
+                                            <div className={`flex items-center space-x-2 px-3 py-1 rounded-full text-xs font-medium ${
+                                              check.valid
+                                                ? 'bg-green-100 text-green-800'
+                                                : 'bg-red-100 text-red-800'
+                                            }`}>
+                                              <MapPin className="w-3 h-3" />
+                                              <span>{check.valid ? `${check.distance}m from outlet` : 'Outside geofence'}</span>
+                                            </div>
+                                          );
+                                        })()}
+                                      </div>
+                                      <div className="text-sm text-purple-700 mb-3">
+                                        <span className="font-medium">Last Entered Stock:</span> {sku.currentStock} {sku.unit}
+                                        <span className="text-xs text-purple-600 ml-2">(10.06.2024)</span>
+                                      </div>
+                                      <div className="space-y-3">
+                                        <div>
+                                          <label className="block text-xs text-purple-700 mb-1">Enter Current Stock:</label>
+                                          <div className="flex items-center space-x-3">
+                                            <input
+                                              type="number"
+                                              placeholder={`Current: ${sku.currentStock}`}
+                                              className="w-32 px-3 py-2 border border-purple-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                                              onClick={(e) => e.stopPropagation()}
+                                              onChange={(e) => {
+                                                const val = e.target.value;
+                                                setNewStockValue(val);
+                                                if (val) {
+                                                  setSelectedSKUForUpdate({sku, productName: product.productName, productCode: product.productCode});
+                                                }
+                                              }}
+                                              value={selectedSKUForUpdate?.sku.skuCode === sku.skuCode ? newStockValue : ''}
+                                            />
+                                            <button
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+
+                                                if (!newStockValue) {
+                                                  alert('Please enter a stock value');
+                                                  return;
+                                                }
+                                                const newStock = parseInt(newStockValue);
+                                                const difference = newStock - sku.currentStock;
+                                                setStockDifference(difference);
+                                                setSelectedSKUForUpdate({sku, productName: product.productName, productCode: product.productCode});
+
+                                                if (difference > 0) {
+                                                  const geofenceCheck = isWithinGeofence();
+                                                  if (!geofenceCheck.valid) {
+                                                    alert(`❌ Location Verification Failed\n\n${geofenceCheck.message}\n\nYou must be at the outlet location to update stock.`);
+                                                    return;
+                                                  }
+
+                                                  const updatedData = verificationProductData.map(prod => {
+                                                    if (prod.productName === product.productName) {
+                                                      return {
+                                                        ...prod,
+                                                        skus: prod.skus.map(s => {
+                                                          if (s.skuCode === sku.skuCode) {
+                                                            return {
+                                                              ...s,
+                                                              currentStock: newStock
+                                                            };
+                                                          }
+                                                          return s;
+                                                        })
+                                                      };
+                                                    }
+                                                    return prod;
+                                                  });
+                                                  setVerificationProductData(updatedData);
+                                                  alert(`✓ Stock updated successfully!\n\n${geofenceCheck.message}\n\nStock increased by ${difference} ${sku.unit}. This is a Retailer Return.`);
+                                                  setNewStockValue('');
+                                                  setSelectedSKUForUpdate(null);
+                                                } else if (difference < 0) {
+                                                  setShowTransactionTypeModal(true);
+                                                } else {
+                                                  alert('No change in stock');
+                                                  setNewStockValue('');
+                                                }
+                                              }}
+                                              className="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition-colors font-medium text-sm"
+                                            >
+                                              Update
+                                            </button>
+                                          </div>
+                                          <p className="text-xs text-purple-600 mt-1">
+                                            If increased = Retailer Return | If decreased = Sale/Liquidation
+                                          </p>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                  </div>
+                </>
+              ) : (
+                <div className="max-w-3xl mx-auto">
+                  <div className="space-y-6">
+                    {/* Location Status Banner */}
+                    {(() => {
+                      const check = isWithinGeofence();
+                      return (
+                        <div className={`flex items-center justify-between p-4 rounded-lg ${
+                          check.valid
+                            ? 'bg-green-50 border border-green-200'
+                            : 'bg-red-50 border border-red-200'
+                        }`}>
+                          <div className="flex items-center space-x-3">
+                            <MapPin className={`w-5 h-5 ${check.valid ? 'text-green-600' : 'text-red-600'}`} />
+                            <div>
+                              <div className={`font-semibold ${check.valid ? 'text-green-900' : 'text-red-900'}`}>
+                                {check.valid ? 'Location Verified' : 'Outside Geofence'}
+                              </div>
+                              <div className={`text-sm ${check.valid ? 'text-green-700' : 'text-red-700'}`}>
+                                {check.message}
+                              </div>
+                            </div>
+                          </div>
+                          {check.valid ? (
+                            <CheckCircle className="w-6 h-6 text-green-600" />
+                          ) : (
+                            <AlertTriangle className="w-6 h-6 text-red-600" />
+                          )}
+                        </div>
+                      );
+                    })()}
+
+                    {/* Proof Upload Section */}
+                    <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 sm:p-6">
+                        <h3 className="text-base sm:text-lg font-semibold text-gray-900 mb-6 text-center">Submit Proof</h3>
+                        <div className="flex flex-col sm:flex-row justify-center items-center gap-3 sm:gap-6">
+                      <button
+                        onClick={handleClickPicture}
+                        className="flex flex-col items-center justify-center w-full sm:w-36 h-36 sm:h-40 border-2 border-dashed border-gray-300 rounded-lg hover:border-orange-500 hover:bg-orange-50 transition-all"
+                      >
+                        <Camera className="w-10 h-10 sm:w-12 sm:h-12 text-gray-400 mb-2" />
+                        <span className="text-sm sm:text-base font-semibold text-gray-700">Click Pic</span>
+                      </button>
+
+                      <div className="text-xl sm:text-2xl text-gray-400 font-semibold">
+                        Or
+                      </div>
+
+                      <button
+                        onClick={() => setShowLetterPreview(true)}
+                        className="flex flex-col items-center justify-center w-full sm:w-36 h-36 sm:h-40 border-2 border-dashed border-gray-300 rounded-lg hover:border-orange-500 hover:bg-orange-50 transition-all"
+                      >
+                        <Upload className="w-10 h-10 sm:w-12 sm:h-12 text-gray-400 mb-2" />
+                        <span className="text-sm sm:text-base font-semibold text-gray-700 text-center px-2">Upload<br/><span className="text-xs">(View Letter)</span></span>
+                      </button>
+
+                      <div className="text-xl sm:text-2xl text-gray-400 font-semibold">
+                        Or
+                      </div>
+
+                      <button
+                        onClick={handleESignature}
+                        className="flex flex-col items-center justify-center w-full sm:w-36 h-36 sm:h-40 border-2 border-dashed border-gray-300 rounded-lg hover:border-orange-500 hover:bg-orange-50 transition-all"
+                      >
+                        <FileText className="w-10 h-10 sm:w-12 sm:h-12 text-gray-400 mb-2" />
+                        <span className="text-sm sm:text-base font-semibold text-gray-700">E-sign</span>
+                      </button>
+                    </div>
+
+                    {/* Uploaded Proofs Display */}
+                    {uploadedProofs.length > 0 && (
+                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                        <div className="flex items-center justify-between mb-3">
+                          <h3 className="text-lg font-semibold text-gray-900">
+                            Uploaded Proofs ({uploadedProofs.length})
+                          </h3>
+                        </div>
+                        <div className="space-y-3">
+                          {uploadedProofs.map((proof) => (
+                            <div key={proof.id} className="bg-white border border-blue-200 rounded-lg p-4">
+                              <div className="flex items-start justify-between mb-3">
+                                <div className="flex items-start space-x-3 flex-1">
+                                  {proof.type === 'signature' ? (
+                                    <FileText className="w-5 h-5 text-blue-600 mt-0.5" />
+                                  ) : (
+                                    <Camera className="w-5 h-5 text-blue-600 mt-0.5" />
+                                  )}
+                                  <div className="flex-1">
+                                    <p className="font-semibold text-gray-900">{proof.name}</p>
+                                    <p className="text-xs text-gray-500 mt-0.5">
+                                      {proof.type === 'signature' ? 'E-Signature' : 'Photo/Document'}
+                                    </p>
+                                  </div>
+                                </div>
+                                <button
+                                  onClick={() => setUploadedProofs(prev => prev.filter(p => p.id !== proof.id))}
+                                  className="text-red-500 hover:text-red-700"
+                                >
+                                  <X className="w-4 h-4" />
+                                </button>
+                              </div>
+
+                              {/* Image Preview */}
+                              {proof.url && (
+                                <div className="mb-3 bg-gray-50 border border-gray-200 rounded p-2">
+                                  <img
+                                    src={proof.url}
+                                    alt={proof.type === 'signature' ? 'Signature' : 'Uploaded Photo'}
+                                    className={proof.type === 'signature' ? 'max-h-24 mx-auto' : 'max-h-40 mx-auto rounded'}
+                                  />
+                                </div>
+                              )}
+
+                              {/* Metadata */}
+                              <div className="grid grid-cols-2 gap-2 text-xs pt-3 border-t border-blue-100">
+                                <div className="flex items-center space-x-2">
+                                  <User className="w-3.5 h-3.5 text-blue-600" />
+                                  <span className="text-gray-700">
+                                    <span className="font-semibold">{proof.metadata.userName || proof.metadata.capturedBy}</span>
+                                    {proof.metadata.designation && (
+                                      <span className="text-gray-500"> ({proof.metadata.designation})</span>
+                                    )}
+                                  </span>
+                                </div>
+                                <div className="flex items-center space-x-2">
+                                  <Clock className="w-3.5 h-3.5 text-blue-600" />
+                                  <span className="text-gray-700">{proof.metadata.capturedAt}</span>
+                                </div>
+                                {proof.location && (
+                                  <div className="flex items-start space-x-2 col-span-2">
+                                    <MapPin className="w-3.5 h-3.5 text-blue-600 mt-0.5" />
+                                    <span className="text-gray-700">
+                                      {proof.location.latitude.toFixed(4)}, {proof.location.longitude.toFixed(4)}
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+
+                    {verificationLetter && verificationMetadata && (
+                      <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                        <div className="flex items-start space-x-3">
+                          <CheckCircle className="w-5 h-5 text-green-600 mt-0.5" />
+                          <div className="flex-1">
+                            <p className="font-semibold text-green-900">File Selected</p>
+                            <p className="text-sm text-green-700">{verificationLetter.name}</p>
+                            <p className="text-xs text-green-600 mt-1">
+                              Size: {(verificationLetter.size / 1024).toFixed(2)} KB
+                            </p>
+                            <div className="mt-3 pt-3 border-t border-green-200">
+                              <div className="grid grid-cols-2 gap-2 text-xs">
+                                <div className="flex items-center space-x-2">
+                                  <User className="w-3.5 h-3.5 text-green-700" />
+                                  <span className="text-green-800">
+                                    <span className="font-semibold">{verificationMetadata.userName}</span>
+                                    <span className="text-green-600"> ({verificationMetadata.designation})</span>
+                                  </span>
+                                </div>
+                                <div className="flex items-center space-x-2">
+                                  <Clock className="w-3.5 h-3.5 text-green-700" />
+                                  <span className="text-green-800">{verificationMetadata.capturedAt}</span>
+                                </div>
+                                <div className="flex items-start space-x-2 col-span-2">
+                                  <MapPin className="w-3.5 h-3.5 text-green-700 mt-0.5" />
+                                  <span className="text-green-800">{verificationMetadata.location}</span>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => {
+                              setVerificationLetter(null);
+                              setVerificationMetadata(null);
+                            }}
+                            className="text-red-600 hover:text-red-800"
+                          >
+                            <X className="w-5 h-5" />
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                        <div className="flex justify-end space-x-3 pt-4">
+                          <button
+                            onClick={() => setModalTab('details')}
+                            className="px-6 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
+                          >
+                            Back
+                          </button>
+                          <button
+                            onClick={handleSubmitProof}
+                            disabled={uploadedProofs.length === 0}
+                            className={`px-6 py-2 rounded-lg transition-colors ${
+                              uploadedProofs.length > 0
+                                ? 'bg-green-600 text-white hover:bg-green-700'
+                                : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                            }`}
+                          >
+                            Submit Verification ({uploadedProofs.length} proof{uploadedProofs.length !== 1 ? 's' : ''})
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Transaction Type Modal - Sold to Farmer vs Sold to Retailer */}
+      {showTransactionTypeModal && selectedSKUForUpdate && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h3 className="text-2xl font-bold text-gray-900">Liquidated to whom?</h3>
+                  <div className="mt-2 space-y-1">
+                    <p className="text-sm text-gray-900 font-semibold">
+                      {selectedSKUForUpdate.productName} / {selectedSKUForUpdate.productCode} / {selectedSKUForUpdate.sku.skuCode}
+                    </p>
+                    <p className="text-xs text-gray-600">
+                      {selectedSKUForUpdate.sku.skuName} • Unit Price: ₹{selectedSKUForUpdate.sku.unitPrice.toLocaleString()}/{selectedSKUForUpdate.sku.unit}
+                    </p>
+                    <div className="mt-3 pt-3 border-t border-gray-200">
+                      <div className="grid grid-cols-3 gap-4 text-center">
+                        <div>
+                          <p className="text-xs text-gray-500 mb-1">Last Balance Stock</p>
+                          <p className="text-lg font-bold text-gray-900">{selectedSKUForUpdate.sku.currentStock}</p>
+                          <p className="text-xs text-gray-500">{selectedSKUForUpdate.sku.unit}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500 mb-1">New Balance Stock</p>
+                          <p className="text-lg font-bold text-orange-600">{parseInt(newStockValue)}</p>
+                          <p className="text-xs text-gray-500">{selectedSKUForUpdate.sku.unit}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-500 mb-1">Stock Decrease</p>
+                          <p className="text-lg font-bold text-red-600">{Math.abs(stockDifference)}</p>
+                          <p className="text-xs text-gray-500">{selectedSKUForUpdate.sku.unit}</p>
+                        </div>
+                      </div>
+                    </div>
+                    <p className="text-sm font-semibold text-blue-600 mt-3">
+                      Liquidation Value: ₹{(Math.abs(stockDifference) * selectedSKUForUpdate.sku.unitPrice).toLocaleString()}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    setShowTransactionTypeModal(false);
+                    setNewStockValue('');
+                    setSelectedSKUForUpdate(null);
+                  }}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+
+              <div className="mb-6">
+                <h4 className="text-lg font-semibold text-gray-900 mb-4">Select Transaction Type</h4>
+                <div className="grid grid-cols-2 gap-4">
+                  {/* Sold to Farmer */}
+                  <button
+                    onClick={() => {
+                      if (!selectedSKUForUpdate) return;
+
+                      const geofenceCheck = isWithinGeofence();
+                      if (!geofenceCheck.valid) {
+                        alert(`❌ Location Verification Failed\n\n${geofenceCheck.message}\n\nYou must be at the outlet location to update stock.`);
+                        return;
+                      }
+
+                      const updatedData = verificationProductData.map(product => {
+                        if (product.productName === selectedSKUForUpdate.productName) {
+                          return {
+                            ...product,
+                            skus: product.skus.map(sku => {
+                              if (sku.skuCode === selectedSKUForUpdate.sku.skuCode) {
+                                const newCurrentStock = parseInt(newStockValue);
+                                const liquidationIncrease = Math.abs(stockDifference);
+                                return {
+                                  ...sku,
+                                  currentStock: newCurrentStock,
+                                  liquidated: sku.liquidated + liquidationIncrease
+                                };
+                              }
+                              return sku;
+                            })
+                          };
+                        }
+                        return product;
+                      });
+
+                      setVerificationProductData(updatedData);
+                      alert(`✓ Stock liquidated to farmer: ${Math.abs(stockDifference)} ${selectedSKUForUpdate.sku.unit}\n\n${geofenceCheck.message}\n\nStock updated successfully!`);
+                      setShowTransactionTypeModal(false);
+                      setNewStockValue('');
+                      setSelectedSKUForUpdate(null);
+                    }}
+                    className="bg-green-50 border-2 border-green-200 rounded-xl p-6 hover:bg-green-100 hover:border-green-300 transition-all"
+                  >
+                    <div className="flex flex-col items-center space-y-3">
+                      <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center">
+                        <Users className="w-8 h-8 text-green-600" />
+                      </div>
+                      <div className="text-center">
+                        <h5 className="font-bold text-gray-900 text-lg">Sold to Farmer</h5>
+                        <p className="text-sm text-gray-600 mt-1">Direct liquidation (counts toward liquidation %)</p>
+                      </div>
+                    </div>
+                  </button>
+
+                  {/* Sold to Retailer */}
+                  <button
+                    onClick={() => {
+                      setRetailersList([]);
+                      setCurrentRetailer({
+                        name: '',
+                        businessName: '',
+                        location: '',
+                        quantity: Math.abs(stockDifference)
+                      });
+                      setShowTransactionTypeModal(false);
+                      setShowRetailerDetailsModal(true);
+                    }}
+                    className="bg-blue-50 border-2 border-blue-200 rounded-xl p-6 hover:bg-blue-100 hover:border-blue-300 transition-all"
+                  >
+                    <div className="flex flex-col items-center space-y-3">
+                      <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center">
+                        <Building className="w-8 h-8 text-blue-600" />
+                      </div>
+                      <div className="text-center">
+                        <h5 className="font-bold text-gray-900 text-lg">Sold to Retailer</h5>
+                        <p className="text-sm text-gray-600 mt-1">Transfer to retailer (requires liquidation tracking)</p>
+                      </div>
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex justify-end space-x-3">
+                <button
+                  onClick={() => {
+                    setShowTransactionTypeModal(false);
+                    setNewStockValue('');
+                    setSelectedSKUForUpdate(null);
+                  }}
+                  className="px-6 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors font-medium"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Retailer Details Modal */}
+      {showRetailerDetailsModal && selectedSKUForUpdate && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60] p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h3 className="text-2xl font-bold text-gray-900">Retailer Details</h3>
+                  <div className="mt-2 space-y-1">
+                    <p className="text-sm text-gray-900 font-semibold">
+                      {selectedSKUForUpdate.productName}
+                    </p>
+                    <p className="text-xs text-gray-600">
+                      Product Code: {selectedSKUForUpdate.productCode}
+                    </p>
+                    <p className="text-xs text-gray-600">
+                      SKU: {selectedSKUForUpdate.sku.skuCode} • {selectedSKUForUpdate.sku.skuName}
+                    </p>
+                    <p className="text-xs text-gray-600">
+                      Unit Price: ₹{selectedSKUForUpdate.sku.unitPrice.toLocaleString()}/{selectedSKUForUpdate.sku.unit}
+                    </p>
+                    <p className="text-sm text-gray-600">
+                      Total Quantity: {Math.abs(stockDifference)} {selectedSKUForUpdate.sku.unit} • Total Value: ₹{(Math.abs(stockDifference) * selectedSKUForUpdate.sku.unitPrice).toLocaleString()}
+                    </p>
+
+                    {/* Visual Progress Bar */}
+                    <div className="mt-3 bg-gray-100 rounded-lg p-3 border border-gray-200">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-medium text-gray-700">Allocation Progress</span>
+                        <span className="text-xs font-bold text-gray-900">
+                          {retailersList.reduce((sum, r) => sum + r.quantity, 0)} / {Math.abs(stockDifference)} {selectedSKUForUpdate.sku.unit}
+                        </span>
+                      </div>
+                      <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
+                        <div
+                          className={`h-full transition-all duration-500 ${
+                            retailersList.reduce((sum, r) => sum + r.quantity, 0) === Math.abs(stockDifference)
+                              ? 'bg-green-500'
+                              : 'bg-blue-500'
+                          }`}
+                          style={{
+                            width: `${Math.min((retailersList.reduce((sum, r) => sum + r.quantity, 0) / Math.abs(stockDifference)) * 100, 100)}%`
+                          }}
+                        />
+                      </div>
+                      <p className={`text-xs mt-2 font-medium ${
+                        Math.abs(stockDifference) - retailersList.reduce((sum, r) => sum + r.quantity, 0) === 0
+                          ? 'text-green-600'
+                          : 'text-orange-600'
+                      }`}>
+                        {Math.abs(stockDifference) - retailersList.reduce((sum, r) => sum + r.quantity, 0) === 0
+                          ? '✓ All units allocated! Ready to save.'
+                          : `⚠ ${Math.abs(stockDifference) - retailersList.reduce((sum, r) => sum + r.quantity, 0)} ${selectedSKUForUpdate.sku.unit} remaining to allocate`
+                        }
+                      </p>
+                    </div>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    setShowRetailerDetailsModal(false);
+                    setNewStockValue('');
+                    setSelectedSKUForUpdate(null);
+                  }}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+
+              <div className="space-y-6 mb-6">
+                {/* Added Retailers List */}
+                {retailersList.length > 0 && (
+                  <div className="border border-gray-200 rounded-lg p-4 bg-gray-50">
+                    <h4 className="font-semibold text-gray-900 mb-3">Added Retailers ({retailersList.length})</h4>
+                    <div className="space-y-2">
+                      {retailersList.map((retailer, index) => (
+                        <div key={index} className="flex items-center justify-between bg-white p-3 rounded-lg border border-gray-200">
+                          <div className="flex-1">
+                            <p className="font-medium text-gray-900">{retailer.name}</p>
+                            <p className="text-sm text-gray-600">{retailer.businessName} • {retailer.location}</p>
+                            <p className="text-sm text-blue-600 font-medium">{retailer.quantity} {selectedSKUForUpdate.sku.unit}</p>
+                          </div>
+                          <button
+                            onClick={() => {
+                              setRetailersList(retailersList.filter((_, i) => i !== index));
+                            }}
+                            className="text-red-500 hover:text-red-700 p-2"
+                          >
+                            <X className="w-5 h-5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Current Retailer Form */}
+                <div className="border border-blue-200 rounded-lg p-4 bg-blue-50">
+                  <div className="flex items-center justify-between mb-4">
+                    <h4 className="font-semibold text-gray-900">{retailersList.length > 0 ? 'Add Another Retailer' : 'Add Retailer Details'}</h4>
+                    {retailersList.length === 0 && (
+                      <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded-full font-medium">Step 1: Add Retailer</span>
+                    )}
+                  </div>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Select Existing or Add New</label>
+                      <select
+                        onChange={(e) => {
+                          if (e.target.value) {
+                            const selected = existingRetailers.find(r => r.name === e.target.value);
+                            if (selected) {
+                              setCurrentRetailer({
+                                name: selected.name,
+                                businessName: selected.businessName,
+                                location: selected.location,
+                                quantity: currentRetailer.quantity
+                              });
+                            }
+                          }
+                        }}
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
+                      >
+                        <option value="">-- Select Existing Retailer or Enter New --</option>
+                        {existingRetailers.map((retailer, idx) => (
+                          <option key={idx} value={retailer.name}>
+                            {retailer.name} - {retailer.businessName}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Retailer Name *</label>
+                      <input
+                        type="text"
+                        value={currentRetailer.name}
+                        onChange={(e) => setCurrentRetailer({ ...currentRetailer, name: e.target.value })}
+                        placeholder="Enter retailer name"
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Business Name *</label>
+                      <input
+                        type="text"
+                        value={currentRetailer.businessName}
+                        onChange={(e) => setCurrentRetailer({ ...currentRetailer, businessName: e.target.value })}
+                        placeholder="Enter business name"
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Location / Region *</label>
+                      <input
+                        type="text"
+                        value={currentRetailer.location}
+                        onChange={(e) => setCurrentRetailer({ ...currentRetailer, location: e.target.value })}
+                        placeholder="Enter location"
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">SKU Quantity *</label>
+                      <input
+                        type="number"
+                        value={currentRetailer.quantity}
+                        onChange={(e) => setCurrentRetailer({ ...currentRetailer, quantity: parseInt(e.target.value) || 0 })}
+                        placeholder="Enter quantity"
+                        max={Math.abs(stockDifference) - retailersList.reduce((sum, r) => sum + r.quantity, 0)}
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">Max available: {Math.abs(stockDifference) - retailersList.reduce((sum, r) => sum + r.quantity, 0)} {selectedSKUForUpdate.sku.unit}</p>
+                    </div>
+
+                    <button
+                      onClick={() => {
+                        const remaining = Math.abs(stockDifference) - retailersList.reduce((sum, r) => sum + r.quantity, 0);
+                        if (!currentRetailer.name || !currentRetailer.businessName || !currentRetailer.location || !currentRetailer.quantity) {
+                          alert('Please fill all fields for the current retailer');
+                          return;
+                        }
+                        if (currentRetailer.quantity > remaining) {
+                          alert(`Quantity cannot exceed remaining: ${remaining} ${selectedSKUForUpdate.sku.unit}`);
+                          return;
+                        }
+                        setRetailersList([...retailersList, currentRetailer]);
+                        setCurrentRetailer({
+                          name: '',
+                          businessName: '',
+                          location: '',
+                          quantity: 0
+                        });
+                      }}
+                      className="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 transition-colors font-medium flex items-center justify-center space-x-2 shadow-md"
+                    >
+                      <Plus className="w-5 h-5" />
+                      <span>Add to List</span>
+                    </button>
+                    {retailersList.length > 0 && (
+                      <p className="text-xs text-center text-gray-600 mt-2">Click "Add to List" to add this retailer, then click "Save Transaction" below when done</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="border-t border-gray-200 pt-4">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full font-medium">Step 2: Save Transaction</span>
+                    <span className="text-sm text-gray-600">({retailersList.length} retailer{retailersList.length !== 1 ? 's' : ''} added)</span>
+                  </div>
+                  {retailersList.length === 0 && (
+                    <span className="text-xs text-red-600 font-medium">⬆ Add at least one retailer first</span>
+                  )}
+                </div>
+                <div className="flex space-x-3">
+                  <button
+                    onClick={() => {
+                      setShowRetailerDetailsModal(false);
+                      setNewStockValue('');
+                      setSelectedSKUForUpdate(null);
+                      setRetailersList([]);
+                      setCurrentRetailer({ name: '', businessName: '', location: '', quantity: 0 });
+                    }}
+                    className="flex-1 px-6 py-3 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors font-medium"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (retailersList.length === 0) {
+                        return;
+                      }
+                    if (!selectedSKUForUpdate) return;
+
+                    const geofenceCheck = isWithinGeofence();
+                    if (!geofenceCheck.valid) {
+                      alert(`❌ Location Verification Failed\n\n${geofenceCheck.message}\n\nYou must be at the outlet location to update stock.`);
+                      return;
+                    }
+
+                    const totalAllocated = retailersList.reduce((sum, r) => sum + r.quantity, 0);
+                    if (totalAllocated !== Math.abs(stockDifference)) {
+                      setAllocationWarningData({
+                        stockDecrease: Math.abs(stockDifference),
+                        totalAllocated,
+                        missing: Math.abs(stockDifference) - totalAllocated,
+                        unit: selectedSKUForUpdate.sku.unit
+                      });
+                      setShowAllocationWarning(true);
+                      return;
+                    }
+
+                    const updatedData = verificationProductData.map(product => {
+                      if (product.productName === selectedSKUForUpdate.productName) {
+                        return {
+                          ...product,
+                          skus: product.skus.map(sku => {
+                            if (sku.skuCode === selectedSKUForUpdate.sku.skuCode) {
+                              const newCurrentStock = parseInt(newStockValue);
+                              return {
+                                ...sku,
+                                currentStock: newCurrentStock
+                              };
+                            }
+                            return sku;
+                          })
+                        };
+                      }
+                      return product;
+                    });
+
+                    setVerificationProductData(updatedData);
+                    const summary = retailersList.map(r => `• ${r.name} (${r.businessName}) - ${r.quantity} ${selectedSKUForUpdate.sku.unit}`).join('\n');
+                    alert(`✓ Stock transferred to ${retailersList.length} retailer(s):\n\n${summary}\n\n${geofenceCheck.message}\n\nStock updated successfully!`);
+                    setShowRetailerDetailsModal(false);
+                    setNewStockValue('');
+                    setSelectedSKUForUpdate(null);
+                    setRetailersList([]);
+                    setCurrentRetailer({ name: '', businessName: '', location: '', quantity: 0 });
+                  }}
+                  disabled={retailersList.length === 0}
+                  className={`flex-1 px-6 py-3 rounded-lg transition-colors font-medium flex items-center justify-center space-x-2 shadow-md ${
+                    retailersList.length === 0
+                      ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                      : 'bg-green-600 text-white hover:bg-green-700'
+                  }`}
+                >
+                  <Save className="w-5 h-5" />
+                  <span>Save Transaction ({retailersList.length} retailer{retailersList.length !== 1 ? 's' : ''})</span>
+                </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Old 360 Degree View Modal - Disabled */}
+      {false && show360ViewModal && selected360Entity && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl max-w-6xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+            {/* Modal Header */}
+            <div className="bg-gradient-to-r from-blue-600 to-blue-700 text-white p-6">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-4">
+                  <div className="w-16 h-16 bg-white bg-opacity-20 rounded-lg flex items-center justify-center">
+                    <Building className="w-8 h-8" />
+                  </div>
+                  <div>
+                    <h2 className="text-2xl font-bold">
+                      {(selected360Entity as any).distributorName || (selected360Entity as any).retailerName}
+                    </h2>
+                    <p className="text-blue-100 mt-1">
+                      Code: {(selected360Entity as any).distributorCode || (selected360Entity as any).retailerCode} •
+                      Territory: {selected360Entity.territory}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShow360ViewModal(false)}
+                  className="text-white hover:bg-white hover:bg-opacity-20 rounded-lg p-2 transition-colors"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+
+              {/* Tab Navigation */}
+              <div className="flex space-x-2 mt-6 border-b border-blue-500">
+                <button
+                  onClick={() => setView360Tab('overview')}
+                  className={`px-6 py-3 font-semibold transition-colors ${
+                    view360Tab === 'overview'
+                      ? 'text-white border-b-2 border-white'
+                      : 'text-blue-200 hover:text-white'
+                  }`}
+                >
+                  Overview
+                </button>
+                <button
+                  onClick={() => setView360Tab('orders')}
+                  className={`px-6 py-3 font-semibold transition-colors ${
+                    view360Tab === 'orders'
+                      ? 'text-white border-b-2 border-white'
+                      : 'text-blue-200 hover:text-white'
+                  }`}
+                >
+                  Past Orders
+                </button>
+                <button
+                  onClick={() => setView360Tab('liquidation')}
+                  className={`px-6 py-3 font-semibold transition-colors ${
+                    view360Tab === 'liquidation'
+                      ? 'text-white border-b-2 border-white'
+                      : 'text-blue-200 hover:text-white'
+                  }`}
+                >
+                  Liquidation History
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Content */}
+            <div className="flex-1 overflow-y-auto p-6">
+              {view360Tab === 'overview' && (
+                <div className="space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div className="bg-orange-50 rounded-lg p-4 border border-orange-200">
+                      <h4 className="text-sm font-medium text-orange-800 mb-2">Opening Stock</h4>
+                      <div className="text-2xl font-bold text-orange-900">
+                        ₹{selected360Entity.metrics.openingStock.value.toFixed(2)}L
+                      </div>
+                      <div className="text-xs text-orange-700 mt-1">
+                        {selected360Entity.metrics.openingStock.volume.toLocaleString()} units
+                      </div>
+                    </div>
+
+                    <div className="bg-blue-50 rounded-lg p-4 border border-blue-200">
+                      <h4 className="text-sm font-medium text-blue-800 mb-2">YTD Net Sales</h4>
+                      <div className="text-2xl font-bold text-blue-900">
+                        ₹{selected360Entity.metrics.ytdNetSales.value.toFixed(2)}L
+                      </div>
+                      <div className="text-xs text-blue-700 mt-1">
+                        {selected360Entity.metrics.ytdNetSales.volume.toLocaleString()} units
+                      </div>
+                    </div>
+
+                    <div className="bg-green-50 rounded-lg p-4 border border-green-200">
+                      <h4 className="text-sm font-medium text-green-800 mb-2">Liquidation</h4>
+                      <div className="text-2xl font-bold text-green-900">
+                        ₹{selected360Entity.metrics.liquidation.value.toFixed(2)}L
+                      </div>
+                      <div className="text-xs text-green-700 mt-1">
+                        {selected360Entity.metrics.liquidation.volume.toLocaleString()} units
+                      </div>
+                    </div>
+
+                    <div className="bg-purple-50 rounded-lg p-4 border border-purple-200">
+                      <h4 className="text-sm font-medium text-purple-800 mb-2">Balance Stock</h4>
+                      <div className="text-2xl font-bold text-purple-900">
+                        ₹{selected360Entity.metrics.balanceStock.value.toFixed(2)}L
+                      </div>
+                      <div className="text-xs text-purple-700 mt-1">
+                        {selected360Entity.metrics.balanceStock.volume.toLocaleString()} units
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-gray-50 rounded-lg p-6 border border-gray-200">
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-lg font-semibold text-gray-700">Liquidation Rate</span>
+                      <span className={`text-2xl font-bold ${
+                        selected360Entity.metrics.liquidationPercentage >= 50 ? 'text-green-600' :
+                        selected360Entity.metrics.liquidationPercentage >= 30 ? 'text-yellow-600' :
+                        'text-red-600'
+                      }`}>
+                        {selected360Entity.metrics.liquidationPercentage}%
+                      </span>
+                    </div>
+                    <div className="w-full bg-gray-200 rounded-full h-4">
+                      <div
+                        className={`h-4 rounded-full transition-all duration-500 ${
+                          selected360Entity.metrics.liquidationPercentage >= 50 ? 'bg-gradient-to-r from-green-500 to-teal-500' :
+                          selected360Entity.metrics.liquidationPercentage >= 30 ? 'bg-gradient-to-r from-yellow-500 to-orange-500' :
+                          'bg-gradient-to-r from-red-500 to-pink-500'
+                        }`}
+                        style={{ width: `${Math.min(100, selected360Entity.metrics.liquidationPercentage)}%` }}
+                      ></div>
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-lg border border-gray-200 p-6">
+                    <h3 className="text-lg font-semibold text-gray-900 mb-4">Contact Information</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="flex items-center space-x-3">
+                        <MapPin className="w-5 h-5 text-gray-400" />
+                        <div>
+                          <p className="text-xs text-gray-500">Location</p>
+                          <p className="font-medium text-gray-900">{selected360Entity.territory}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center space-x-3">
+                        <Package className="w-5 h-5 text-gray-400" />
+                        <div>
+                          <p className="text-xs text-gray-500">Status</p>
+                          <span className={`inline-block px-3 py-1 rounded-full text-sm font-medium ${
+                            selected360Entity.status === 'Active' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
+                          }`}>
+                            {selected360Entity.status}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {view360Tab === 'orders' && (
+                <div className="space-y-4">
+                  <h3 className="text-lg font-semibold text-gray-900 mb-4">Past Orders</h3>
+
+                  {[
+                    {
+                      id: 'ORD-2024-001',
+                      date: '2024-09-15',
+                      products: 'Pesticide Mix, Seed Pack A',
+                      quantity: 500,
+                      value: 45000,
+                      status: 'Delivered'
+                    },
+                    {
+                      id: 'ORD-2024-002',
+                      date: '2024-08-22',
+                      products: 'Fertilizer Premium, Seed Pack B',
+                      quantity: 750,
+                      value: 68000,
+                      status: 'Delivered'
+                    },
+                    {
+                      id: 'ORD-2024-003',
+                      date: '2024-07-10',
+                      products: 'Pesticide Standard, Growth Booster',
+                      quantity: 300,
+                      value: 32000,
+                      status: 'Delivered'
+                    }
+                  ].map((order) => (
+                    <div key={order.id} className="bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          <div className="flex items-center space-x-3 mb-2">
+                            <h4 className="font-semibold text-gray-900">{order.id}</h4>
+                            <span className="px-2 py-1 bg-green-100 text-green-800 text-xs font-medium rounded">
+                              {order.status}
+                            </span>
+                          </div>
+                          <p className="text-sm text-gray-600 mb-2">{order.products}</p>
+                          <div className="flex items-center space-x-4 text-xs text-gray-500">
+                            <span>Date: {new Date(order.date).toLocaleDateString('en-IN')}</span>
+                            <span>Qty: {order.quantity} units</span>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-xs text-gray-500">Order Value</p>
+                          <p className="text-lg font-bold text-gray-900">₹{(order.value / 1000).toFixed(1)}K</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {view360Tab === 'liquidation' && (
+                <div className="space-y-4">
+                  <h3 className="text-lg font-semibold text-gray-900 mb-4">Liquidation History with Proofs</h3>
+
+                  {[
+                    {
+                      id: 'LIQ-2024-001',
+                      date: '2024-10-05',
+                      products: 'Pesticide Mix',
+                      quantity: 250,
+                      value: 22500,
+                      proofType: 'E-Signature',
+                      verifiedBy: 'priya.sharma@gencrest.com',
+                      status: 'Verified'
+                    },
+                    {
+                      id: 'LIQ-2024-002',
+                      date: '2024-09-28',
+                      products: 'Seed Pack A, Fertilizer',
+                      quantity: 400,
+                      value: 38000,
+                      proofType: 'Photo + E-Signature',
+                      verifiedBy: 'priya.sharma@gencrest.com',
+                      status: 'Verified'
+                    },
+                    {
+                      id: 'LIQ-2024-003',
+                      date: '2024-09-15',
+                      products: 'Growth Booster',
+                      quantity: 150,
+                      value: 15000,
+                      proofType: 'Letterhead',
+                      verifiedBy: 'priya.sharma@gencrest.com',
+                      status: 'Verified'
+                    }
+                  ].map((liquidation) => (
+                    <div key={liquidation.id} className="bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
+                      <div className="flex items-start justify-between mb-3">
+                        <div className="flex-1">
+                          <div className="flex items-center space-x-3 mb-2">
+                            <h4 className="font-semibold text-gray-900">{liquidation.id}</h4>
+                            <span className="px-2 py-1 bg-green-100 text-green-800 text-xs font-medium rounded flex items-center space-x-1">
+                              <CheckCircle className="w-3 h-3" />
+                              <span>{liquidation.status}</span>
+                            </span>
+                          </div>
+                          <p className="text-sm text-gray-600 mb-2">{liquidation.products}</p>
+                          <div className="flex items-center space-x-4 text-xs text-gray-500">
+                            <span>Date: {new Date(liquidation.date).toLocaleDateString('en-IN')}</span>
+                            <span>Qty: {liquidation.quantity} units</span>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-xs text-gray-500">Liquidation Value</p>
+                          <p className="text-lg font-bold text-green-600">₹{(liquidation.value / 1000).toFixed(1)}K</p>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 pt-3 border-t border-gray-200">
+                        <div className="flex items-center justify-between text-xs">
+                          <div className="flex items-center space-x-2">
+                            <FileText className="w-4 h-4 text-blue-600" />
+                            <span className="text-gray-600">Proof Type:</span>
+                            <span className="font-medium text-gray-900">{liquidation.proofType}</span>
+                          </div>
+                          <div className="flex items-center space-x-2">
+                            <User className="w-4 h-4 text-gray-600" />
+                            <span className="text-gray-600">Verified by:</span>
+                            <span className="font-medium text-gray-900">{liquidation.verifiedBy}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="border-t border-gray-200 p-6 bg-gray-50">
+              <div className="flex justify-end">
+                <button
+                  onClick={() => setShow360ViewModal(false)}
+                  className="px-6 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Signature Capture Modal */}
+      <SignatureCapture
+        isOpen={showSignatureCapture}
+        onClose={() => setShowSignatureCapture(false)}
+        onSave={handleSaveSignature}
+        title="E-Signature Verification"
+        outletName="Green Valley Outlet"
+        entityName="SRI RAMA SEEDS AND PESTICIDES"
+        entityCode="1325"
+        entityType="Distributor"
+      />
+
+      {/* New Enhanced 360 View */}
+      {show360ViewModal && selected360Entity && (
+        <Entity360View
+          entity={selected360Entity}
+          onClose={() => setShow360ViewModal(false)}
+        />
+      )}
+
+      {/* Letter Preview Modal */}
+      {showLetterPreview && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-[60] flex items-center justify-center p-0 sm:p-4">
+          <div className="bg-white rounded-none sm:rounded-xl w-screen sm:w-full sm:max-w-4xl h-full sm:h-auto sm:max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="bg-gradient-to-r from-orange-500 to-orange-600 text-white p-4 sm:p-6">
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg sm:text-xl font-bold">Verification Letter</h3>
+                <button
+                  onClick={() => setShowLetterPreview(false)}
+                  className="text-white hover:text-orange-100"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+              <p className="text-orange-100 text-xs sm:text-sm mt-1">Download, sign, stamp, and upload</p>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+              <div className="bg-white border border-gray-300 rounded-lg p-4 sm:p-6 text-xs sm:text-sm font-mono whitespace-pre-wrap">
+                {generateVerificationLetter()}
+              </div>
+
+              <div className="mt-4 sm:mt-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
+                <div className="flex items-start space-x-3">
+                  <AlertTriangle className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <p className="text-sm font-semibold text-blue-900">Instructions:</p>
+                    <ol className="text-xs sm:text-sm text-blue-800 mt-2 space-y-1 list-decimal list-inside">
+                      <li>Download this letter using the button below</li>
+                      <li>Print the letter on company letterhead</li>
+                      <li>Add your signature and company stamp</li>
+                      <li>Take a photo or scan the signed document</li>
+                      <li>Upload it using the "Upload" option in Submit Proof section</li>
+                    </ol>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="border-t border-gray-200 p-4 sm:p-6 bg-gray-50">
+              <div className="flex flex-col sm:flex-row justify-between gap-3">
+                <button
+                  onClick={downloadVerificationLetter}
+                  className="flex items-center justify-center space-x-2 bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition-colors font-medium"
+                >
+                  <Download className="w-5 h-5" />
+                  <span>Download Letter</span>
+                </button>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setShowLetterPreview(false)}
+                    className="flex-1 sm:flex-none px-6 py-3 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-100 transition-colors font-medium"
+                  >
+                    Close
+                  </button>
+                  <label className="flex-1 sm:flex-none">
+                    <input
+                      type="file"
+                      accept="image/*,.pdf"
+                      className="hidden"
+                      onChange={(e) => {
+                        handleFileUpload(e);
+                        setShowLetterPreview(false);
+                      }}
+                    />
+                    <span className="flex items-center justify-center space-x-2 bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 transition-colors font-medium cursor-pointer">
+                      <Upload className="w-5 h-5" />
+                      <span>Upload Signed</span>
+                    </span>
+                  </label>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Allocation Warning Modal */}
+      {showAllocationWarning && allocationWarningData && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-[60] flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl max-w-md w-full shadow-2xl transform transition-all">
+            <div className="bg-gradient-to-r from-orange-500 to-red-500 p-6 rounded-t-xl">
+              <div className="flex items-center space-x-3 text-white">
+                <AlertTriangle className="w-8 h-8" />
+                <h3 className="text-xl font-bold">Stock Allocation Mismatch</h3>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-700 font-medium">Stock Decrease:</span>
+                    <span className="text-lg font-bold text-gray-900">
+                      {allocationWarningData.stockDecrease} {allocationWarningData.unit}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-700 font-medium">Total Allocated:</span>
+                    <span className="text-lg font-bold text-blue-600">
+                      {allocationWarningData.totalAllocated} {allocationWarningData.unit}
+                    </span>
+                  </div>
+                  <div className="h-px bg-orange-200 my-2"></div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-700 font-bold">Missing:</span>
+                    <span className="text-xl font-bold text-red-600">
+                      {allocationWarningData.missing} {allocationWarningData.unit}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                <p className="text-sm text-gray-700 leading-relaxed">
+                  Please account for all <strong>{allocationWarningData.stockDecrease} {allocationWarningData.unit}</strong> by adding retailers/farmers and specifying the quantities they received.
+                </p>
+                <p className="text-sm text-gray-600 mt-2">
+                  This ensures complete traceability of stock movement for liquidation tracking.
+                </p>
+              </div>
+
+              <div className="flex space-x-3">
+                <button
+                  onClick={() => {
+                    setShowAllocationWarning(false);
+                    setAllocationWarningData(null);
+                  }}
+                  className="flex-1 bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 transition-colors font-medium"
+                >
+                  Got It, Add More Retailers
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default Liquidation;
+            

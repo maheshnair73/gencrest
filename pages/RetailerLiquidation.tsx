@@ -1,0 +1,757 @@
+import React, { useState } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { useBusinessValidation } from '../utils/businessValidation';
+import { ArrowLeft, Package, TrendingUp, Users, Calendar, MapPin, Phone, Building, CheckCircle, AlertTriangle, CreditCard as Edit, Save, X, Plus, Minus, Shield } from 'lucide-react';
+
+interface RetailerLiquidationData {
+  id: string;
+  retailerId: string;
+  retailerCode: string;
+  retailerName: string;
+  distributorId: string;
+  distributorName: string;
+  productId: string;
+  productName: string;
+  productCode: string;
+  skuCode: string;
+  skuName: string;
+  unit: string;
+  assignedStock: number;
+  currentStock: number;
+  liquidatedStock: number;
+  assignedValue: number;
+  currentValue: number;
+  liquidatedValue: number;
+  billingDate: string;
+  lastUpdated: string;
+  updatedBy: string;
+  hasSignature: boolean;
+  hasMedia: boolean;
+  territory: string;
+  region: string;
+  zone: string;
+  assignedMDO?: string;
+  assignedTSM?: string;
+  liquidationPercentage: number;
+  targetLiquidation: number;
+  status: 'Active' | 'Pending' | 'Completed' | 'Overdue';
+  priority: 'High' | 'Medium' | 'Low';
+  daysOverdue: number;
+  remarks?: string;
+  approvalStatus: 'Pending' | 'Approved' | 'Rejected';
+  approvedBy?: string;
+  approvedDate?: string;
+}
+
+const RetailerLiquidation: React.FC = () => {
+  const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const { validateAndAlert } = useBusinessValidation();
+  
+  // Sample data - in real app this would come from API
+  const [liquidationData, setLiquidationData] = useState<RetailerLiquidationData>({
+    id: id || '1',
+    retailerId: 'RET001',
+    retailerCode: 'GAS001',
+    retailerName: 'Green Agro Store',
+    distributorId: 'DIST001',
+    distributorName: 'SRI RAMA SEEDS AND PESTICIDES',
+    productId: 'P001',
+    productName: 'DAP (Di-Ammonium Phosphate)',
+    productCode: 'FERT001',
+    skuCode: 'DAP-25KG',
+    skuName: 'DAP 25kg Bag',
+    unit: 'Kg',
+    assignedStock: 50,
+    currentStock: 35,
+    liquidatedStock: 15,
+    assignedValue: 0.60,
+    currentValue: 0.42,
+    liquidatedValue: 0.18,
+    billingDate: '2024-01-15',
+    lastUpdated: '2024-01-20',
+    updatedBy: 'MDO001',
+    hasSignature: false,
+    hasMedia: false,
+    territory: 'North Delhi',
+    region: 'Delhi NCR',
+    zone: 'North Zone',
+    assignedMDO: 'MDO001',
+    assignedTSM: 'TSM001',
+    liquidationPercentage: 30,
+    targetLiquidation: 50,
+    status: 'Active',
+    priority: 'High',
+    daysOverdue: 5,
+    remarks: 'Stock verification pending',
+    approvalStatus: 'Pending',
+    approvedBy: undefined,
+    approvedDate: undefined
+  });
+
+  const [editingStock, setEditingStock] = useState(false);
+  const [tempCurrentStock, setTempCurrentStock] = useState(liquidationData.currentStock);
+  const [originalStock, setOriginalStock] = useState(liquidationData.currentStock);
+  const [showModal, setShowModal] = useState(false);
+  const [transactionType, setTransactionType] = useState<'farmer' | 'retailer' | ''>('');
+  const [retailerCount, setRetailerCount] = useState(3);
+  const [retailers, setRetailers] = useState([
+    { id: '1', name: 'Retailer 1', assignedQty: 0, soldQty: 0 },
+    { id: '2', name: 'Retailer 2', assignedQty: 0, soldQty: 0 },
+    { id: '3', name: 'Retailer 3', assignedQty: 0, soldQty: 0 }
+  ]);
+  const [farmerQty, setFarmerQty] = useState(0);
+
+  const stockDifference = originalStock - tempCurrentStock;
+
+  const handleEditStock = () => {
+    setOriginalStock(liquidationData.currentStock);
+    setTempCurrentStock(liquidationData.currentStock);
+    setEditingStock(true);
+  };
+
+  const handleSaveStock = () => {
+    const difference = originalStock - tempCurrentStock;
+    
+    // Validate stock movement
+    const isValid = validateAndAlert('stock_movement', {
+      currentStock: originalStock,
+      quantity: difference,
+      type: 'sale'
+    });
+    
+    if (!isValid) {
+      return;
+    }
+    
+    if (difference > 0) {
+      // Stock was reduced - show "Liquidated to whom?" modal
+      setShowModal(true);
+      setTransactionType('');
+      setFarmerQty(0);
+      setRetailers(retailers.map(r => ({ ...r, assignedQty: 0, soldQty: 0 })));
+    } else {
+      // Stock was increased or same - just save
+      setLiquidationData(prev => ({
+        ...prev,
+        currentStock: tempCurrentStock,
+        currentValue: (tempCurrentStock / prev.assignedStock) * prev.assignedValue,
+        lastUpdated: new Date().toISOString()
+      }));
+      setEditingStock(false);
+    }
+  };
+
+  const handleCancelEdit = () => {
+    setTempCurrentStock(originalStock);
+    setEditingStock(false);
+  };
+
+  const handleTransactionTypeChange = (type: 'farmer' | 'retailer') => {
+    setTransactionType(type);
+    if (type === 'farmer') {
+      setFarmerQty(stockDifference);
+    }
+  };
+
+  const handleRetailerCountChange = (count: number) => {
+    setRetailerCount(count);
+    const newRetailers = [];
+    for (let i = 0; i < count; i++) {
+      const existingRetailer = retailers[i];
+      newRetailers.push(existingRetailer || {
+        id: (i + 1).toString(),
+        name: `Retailer ${i + 1}`,
+        assignedQty: 0,
+        soldQty: 0
+      });
+    }
+    setRetailers(newRetailers);
+  };
+
+  const handleRetailerChange = (index: number, field: 'assignedQty' | 'soldQty', value: number) => {
+    setRetailers(prev => 
+      prev.map((retailer, i) => 
+        i === index ? { ...retailer, [field]: value } : retailer
+      )
+    );
+  };
+
+  const handleModalSave = () => {
+    const totalAssigned = retailers.slice(0, retailerCount).reduce((sum, r) => sum + r.assignedQty, 0);
+    const totalSold = retailers.slice(0, retailerCount).reduce((sum, r) => sum + r.soldQty, 0);
+    
+    // Validate retailer liquidation
+    const isValid = validateAndAlert('retailer_liquidation', {
+      assignedStock: liquidationData.assignedStock,
+      currentStock: tempCurrentStock,
+      soldToFarmers: transactionType === 'farmer' ? farmerQty : totalSold,
+      soldToRetailers: transactionType === 'retailer' ? totalAssigned : 0
+    });
+    
+    if (!isValid) {
+      return;
+    }
+    
+    if (transactionType === 'retailer') {
+      if (totalAssigned !== stockDifference) {
+        alert(`Total assigned (${totalAssigned}) must equal stock difference (${stockDifference})`);
+        return;
+      }
+    }
+    
+    // Update liquidation data
+    let newLiquidatedStock = liquidationData.liquidatedStock;
+    if (transactionType === 'farmer') {
+      newLiquidatedStock += farmerQty;
+    }
+    // Note: Retailer sales don't count as liquidation here - tracked separately
+    
+    setLiquidationData(prev => ({
+      ...prev,
+      currentStock: tempCurrentStock,
+      liquidatedStock: newLiquidatedStock,
+      liquidationPercentage: Math.round((newLiquidatedStock / prev.assignedStock) * 100),
+      currentValue: (tempCurrentStock / prev.assignedStock) * prev.assignedValue,
+      liquidatedValue: (newLiquidatedStock / prev.assignedStock) * prev.assignedValue,
+      lastUpdated: new Date().toISOString()
+    }));
+    
+    setShowModal(false);
+    setEditingStock(false);
+  };
+
+  const handleVerifyStock = () => {
+    // Handle stock verification logic
+    handleModalSave();
+  };
+
+  const getTotalAssigned = () => retailers.slice(0, retailerCount).reduce((sum, r) => sum + r.assignedQty, 0);
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'Active': return 'text-green-700 bg-green-100';
+      case 'Pending': return 'text-yellow-700 bg-yellow-100';
+      case 'Completed': return 'text-blue-700 bg-blue-100';
+      case 'Overdue': return 'text-red-700 bg-red-100';
+      default: return 'text-gray-700 bg-gray-100';
+    }
+  };
+
+  const getPriorityColor = (priority: string) => {
+    switch (priority) {
+      case 'High': return 'text-red-700 bg-red-100';
+      case 'Medium': return 'text-yellow-700 bg-yellow-100';
+      case 'Low': return 'text-green-700 bg-green-100';
+      default: return 'text-gray-700 bg-gray-100';
+    }
+  };
+
+  return (
+    <>
+      <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center space-x-3">
+          <button 
+            onClick={() => navigate('/liquidation')}
+            className="p-2 hover:bg-gray-100 rounded-full transition-colors"
+          >
+            <ArrowLeft className="w-5 h-5" />
+          </button>
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Retailer Liquidation Details</h1>
+            <p className="text-gray-600 mt-1">Track and manage retailer stock liquidation</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Retailer Info Card */}
+      <div className="bg-white rounded-xl p-6 card-shadow">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center space-x-4">
+            <div className="w-12 h-12 bg-purple-100 rounded-full flex items-center justify-center">
+              <Building className="w-6 h-6 text-purple-600" />
+            </div>
+            <div>
+              <h2 className="text-xl font-semibold text-gray-900">{liquidationData.retailerName}</h2>
+              <p className="text-gray-600">{liquidationData.retailerCode}</p>
+            </div>
+          </div>
+          <div className="flex items-center space-x-2">
+            <span className={`px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(liquidationData.status)}`}>
+              {liquidationData.status}
+            </span>
+            <span className={`px-3 py-1 rounded-full text-sm font-medium ${getPriorityColor(liquidationData.priority)}`}>
+              {liquidationData.priority}
+            </span>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="flex items-center text-sm text-gray-600">
+            <MapPin className="w-4 h-4 mr-2" />
+            <div>
+              <p className="font-medium">Territory: {liquidationData.territory}</p>
+              <p>Region: {liquidationData.region}</p>
+            </div>
+          </div>
+          <div className="flex items-center text-sm text-gray-600">
+            <Users className="w-4 h-4 mr-2" />
+            <div>
+              <p className="font-medium">MDO: {liquidationData.assignedMDO}</p>
+              <p>TSM: {liquidationData.assignedTSM}</p>
+            </div>
+          </div>
+          <div className="flex items-center text-sm text-gray-600">
+            <Calendar className="w-4 h-4 mr-2" />
+            <div>
+              <p className="font-medium">Billing: {new Date(liquidationData.billingDate).toLocaleDateString()}</p>
+              <p>Updated: {new Date(liquidationData.lastUpdated).toLocaleDateString()}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Product Details Card */}
+      <div className="bg-white rounded-xl p-6 card-shadow">
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">Product Details</h3>
+        
+        <div className="bg-gray-50 rounded-xl p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h4 className="text-lg font-semibold text-gray-900">{liquidationData.productName}</h4>
+              <p className="text-gray-600">{liquidationData.skuName} ({liquidationData.skuCode})</p>
+              <p className="text-sm text-gray-500">Last Updated: {new Date(liquidationData.lastUpdated).toLocaleDateString()}</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {/* Assigned Stock */}
+            <div className="bg-orange-50 rounded-xl p-4 text-center border border-orange-200">
+              <div className="w-12 h-12 bg-orange-500 rounded-lg flex items-center justify-center mx-auto mb-3">
+                <Package className="w-6 h-6 text-white" />
+              </div>
+              <div className="text-2xl font-bold text-orange-800 mb-1">{liquidationData.assignedStock}</div>
+              <div className="text-sm text-orange-600 mb-2">{liquidationData.unit}</div>
+              <div className="text-sm font-semibold text-orange-700">₹{liquidationData.assignedValue.toFixed(2)}L</div>
+              <div className="text-xs text-orange-600 mt-1">Assigned</div>
+            </div>
+
+            {/* Current Stock */}
+            <div className="bg-blue-50 rounded-xl p-4 text-center border border-blue-200">
+              <div className="w-12 h-12 bg-blue-500 rounded-lg flex items-center justify-center mx-auto mb-3">
+                <TrendingUp className="w-6 h-6 text-white" />
+              </div>
+              <div className="flex items-center justify-center space-x-2 mb-2">
+                {editingStock ? (
+                  <div className="flex items-center space-x-2">
+                    <button
+                      onClick={() => setTempCurrentStock(Math.max(0, tempCurrentStock - 1))}
+                      className="w-8 h-8 bg-red-500 text-white rounded-full flex items-center justify-center hover:bg-red-600"
+                    >
+                      <Minus className="w-4 h-4" />
+                    </button>
+                    <input
+                      type="number"
+                      value={tempCurrentStock}
+                      onChange={(e) => setTempCurrentStock(parseInt(e.target.value) || 0)}
+                      className="w-16 text-center text-xl font-bold text-blue-800 bg-transparent border-b-2 border-blue-300 focus:border-blue-500 outline-none"
+                    />
+                    <button
+                      onClick={() => setTempCurrentStock(tempCurrentStock + 1)}
+                      className="w-8 h-8 bg-green-500 text-white rounded-full flex items-center justify-center hover:bg-green-600"
+                    >
+                      <Plus className="w-4 h-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="text-2xl font-bold text-blue-800">{liquidationData.currentStock}</div>
+                )}
+              </div>
+              <div className="text-sm text-blue-600 mb-2">{liquidationData.unit}</div>
+              <div className="text-sm font-semibold text-blue-700">₹{liquidationData.currentValue.toFixed(2)}L</div>
+              <div className="text-xs text-blue-600 mt-1">Current Stock</div>
+              
+              {editingStock ? (
+                <div className="flex space-x-2 mt-3">
+                  <button
+                    onClick={handleSaveStock}
+                    className="flex-1 bg-green-600 text-white py-1 px-3 rounded-lg text-sm hover:bg-green-700 flex items-center justify-center"
+                  >
+                    <Save className="w-3 h-3 mr-1" />
+                    Save
+                  </button>
+                  <button
+                    onClick={handleCancelEdit}
+                    className="flex-1 bg-gray-500 text-white py-1 px-3 rounded-lg text-sm hover:bg-gray-600 flex items-center justify-center"
+                  >
+                    <X className="w-3 h-3 mr-1" />
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={handleEditStock}
+                  className="mt-3 bg-blue-600 text-white py-1 px-3 rounded-lg text-sm hover:bg-blue-700 flex items-center justify-center mx-auto"
+                >
+                  <Edit className="w-3 h-3 mr-1" />
+                  Update Stock
+                </button>
+              )}
+            </div>
+
+            {/* Liquidated Stock */}
+            <div className="bg-green-50 rounded-xl p-4 text-center border border-green-200">
+              <div className="w-12 h-12 bg-green-500 rounded-lg flex items-center justify-center mx-auto mb-3">
+                <CheckCircle className="w-6 h-6 text-white" />
+              </div>
+              <div className="text-2xl font-bold text-green-800 mb-1">{liquidationData.liquidatedStock}</div>
+              <div className="text-sm text-green-600 mb-2">{liquidationData.unit}</div>
+              <div className="text-sm font-semibold text-green-700">₹{liquidationData.liquidatedValue.toFixed(2)}L</div>
+              <div className="text-xs text-green-600 mt-1">Liquidated</div>
+            </div>
+          </div>
+
+          {/* Liquidation Progress */}
+          <div className="mt-6">
+            <div className="flex justify-between text-sm text-gray-600 mb-2">
+              <span>Liquidation Progress</span>
+              <span>{liquidationData.liquidationPercentage}% (Target: {liquidationData.targetLiquidation}%)</span>
+            </div>
+            <div className="w-full bg-gray-200 rounded-full h-3">
+              <div 
+                className="bg-gradient-to-r from-green-500 to-blue-500 h-3 rounded-full transition-all duration-500" 
+                style={{ width: `${Math.min(100, (liquidationData.liquidationPercentage / liquidationData.targetLiquidation) * 100)}%` }}
+              ></div>
+            </div>
+            <div className="flex justify-between text-xs text-gray-500 mt-1">
+              <span>0%</span>
+              <span>Target: {liquidationData.targetLiquidation}%</span>
+              <span>100%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Stock Reduction Modal */}
+      {showModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl w-full max-w-4xl max-h-[90vh] overflow-hidden">
+            <div className="flex items-center justify-between p-6 border-b">
+              <div>
+                <h3 className="text-xl font-semibold text-gray-900">Liquidated to whom?</h3>
+                <p className="text-sm text-gray-600 mt-1">
+                  {liquidationData.productName} - Quantity: {stockDifference} {liquidationData.unit}
+                </p>
+              </div>
+              <button
+                onClick={() => setShowModal(false)}
+                className="p-2 hover:bg-gray-100 rounded-full transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="p-6 overflow-y-auto max-h-[calc(90vh-120px)]">
+              {/* Transaction Type Selection */}
+              <div className="mb-6">
+                <h4 className="text-lg font-semibold text-gray-900 mb-4">Select Transaction Type</h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div 
+                    className={`p-6 rounded-xl border-2 cursor-pointer transition-all ${
+                      transactionType === 'farmer' 
+                        ? 'border-green-500 bg-green-50' 
+                        : 'border-gray-200 hover:border-green-300'
+                    }`}
+                    onClick={() => handleTransactionTypeChange('farmer')}
+                  >
+                    <div className="text-center">
+                      <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <Users className="w-8 h-8 text-green-600" />
+                      </div>
+                      <h5 className="text-lg font-semibold text-gray-900 mb-2">Sold to Farmer</h5>
+                      <p className="text-sm text-gray-600">Direct liquidation</p>
+                    </div>
+                  </div>
+                  
+                  <div 
+                    className={`p-6 rounded-xl border-2 cursor-pointer transition-all ${
+                      transactionType === 'retailer' 
+                        ? 'border-blue-500 bg-blue-50' 
+                        : 'border-gray-200 hover:border-blue-300'
+                    }`}
+                    onClick={() => handleTransactionTypeChange('retailer')}
+                  >
+                    <div className="text-center">
+                      <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <Building className="w-8 h-8 text-blue-600" />
+                      </div>
+                      <h5 className="text-lg font-semibold text-gray-900 mb-2">Sold to Retailer</h5>
+                      <p className="text-sm text-gray-600">
+                        <input
+                          type="number"
+                          className="w-full px-3 py-2 border border-blue-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                          placeholder="Quantity assigned to retailer"
+                        />
+                      </p>
+                    </div>
+                    <div className="bg-green-100 rounded-lg p-3">
+                      <p className="text-sm font-semibold text-green-800">✓ This counts as liquidation</p>
+                      <p className="text-xs text-green-600 mt-1">No additional details required</p>
+                    </div>
+                  </div>
+                </div>
+
+              {/* Retailer Details - CONDITIONAL */}
+              {transactionType === 'retailer' && (
+                <div className="bg-blue-50 rounded-xl p-6 mb-6">
+                  <h5 className="text-lg font-semibold text-blue-800 mb-4">Retailer Sale Details</h5>
+                  
+                  {/* Product Information */}
+                  <div className="bg-white rounded-lg p-4 mb-4 border border-blue-200">
+                    <h6 className="font-semibold text-gray-900 mb-2">Product Information</h6>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Product Name</label>
+                        <input
+                          type="text"
+                          value={liquidationData.productName}
+                          readOnly
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-gray-700"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">SKU</label>
+                        <select className="w-full px-3 py-2 border border-blue-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                          <option value={liquidationData.skuCode}>{liquidationData.skuName}</option>
+                          <option value="DAP-50KG">DAP 50kg Bag</option>
+                          <option value="UREA-25KG">Urea 25kg Bag</option>
+                          <option value="UREA-50KG">Urea 50kg Bag</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="flex items-center justify-between mb-4">
+                    <span className="text-sm font-medium text-blue-700">How many retailers?</span>
+                    <select
+                      value={retailerCount}
+                      onChange={(e) => handleRetailerCountChange(parseInt(e.target.value))}
+                      className="px-3 py-1 border border-blue-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    >
+                      {[1,2,3,4,5,6,7,8,9,10].map(num => (
+                        <option key={num} value={num}>{num}</option>
+                      ))}
+                    </select>
+                  </div>
+                  
+                  <div className="space-y-4">
+                    {retailers.slice(0, retailerCount).map((retailer, index) => (
+                      <div key={retailer.id} className="bg-white rounded-lg p-4 border border-blue-200">
+                        <h6 className="font-semibold text-gray-900 mb-3">Retailer {index + 1}</h6>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                              Quantity ({liquidationData.unit})
+                            </label>
+                            <input
+                              type="number"
+                              value={retailer.assignedQty}
+                              onChange={(e) => handleRetailerChange(index, 'assignedQty', parseInt(e.target.value) || 0)}
+                              className="w-full px-3 py-2 border border-blue-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                              placeholder="Enter quantity"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                              Sold to Farmers ({liquidationData.unit})
+                            </label>
+                            <input
+                              type="number"
+                              value={retailer.soldQty}
+                              onChange={(e) => handleRetailerChange(index, 'soldQty', parseInt(e.target.value) || 0)}
+                              max={retailer.assignedQty}
+                              className="w-full px-3 py-2 border border-blue-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                              placeholder="Quantity sold to farmers"
+                            />
+                          </div>
+                        </div>
+                        {retailer.soldQty > retailer.assignedQty && (
+                          <p className="text-red-600 text-sm mt-2">
+                            ⚠️ Sold quantity cannot exceed assigned quantity
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Summary */}
+              {transactionType && (
+                <>
+                  <div className="bg-gray-50 rounded-xl p-6 mb-6">
+                    <h5 className="text-lg font-semibold text-gray-900 mb-4">Summary</h5>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="text-center">
+                        <div className="text-2xl font-bold text-gray-900">{stockDifference}</div>
+                        <div className="text-sm text-gray-600">Stock Reduction</div>
+                      </div>
+                      
+                      {transactionType === 'farmer' && (
+                        <>
+                          <div className="text-center">
+                            <div className="text-2xl font-bold text-green-600">{farmerQty}</div>
+                            <div className="text-sm text-gray-600">Sold to Farmers</div>
+                          </div>
+                          <div className="text-center">
+                            <div className="text-2xl font-bold text-green-600">{farmerQty}</div>
+                            <div className="text-sm text-gray-600">Liquidation Count</div>
+                          </div>
+                        </>
+                      )}
+                      
+                      {transactionType === 'retailer' && (
+                        <>
+                          <div className="text-center">
+                            <div className="text-2xl font-bold text-blue-600">{getTotalAssigned()}</div>
+                            <div className="text-sm text-gray-600">Assigned to Retailers</div>
+                          </div>
+                          <div className="text-center">
+                            <div className="text-2xl font-bold text-orange-600">0</div>
+                            <div className="text-sm text-gray-600">Liquidation Count</div>
+                            <div className="text-xs text-gray-500 mt-1">(Tracked separately)</div>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                    
+                    {transactionType === 'retailer' && getTotalAssigned() !== stockDifference && (
+                      <div className="mt-4 p-3 bg-red-100 border border-red-300 rounded-lg">
+                        <p className="text-red-800 text-sm">
+                          ⚠️ Total assigned ({getTotalAssigned()}) must equal stock difference ({stockDifference})
+                        </p>
+                      </div>
+                    )}
+                    
+                    {transactionType === 'retailer' && (
+                      <div className="mt-4 p-3 bg-blue-100 border border-blue-300 rounded-lg">
+                        <p className="text-blue-800 text-sm">
+                          ℹ️ Retailer-to-farmer sales will be tracked separately when checking retailer lists
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+              
+              {/* Farmer Details - Simple confirmation */}
+              {transactionType === 'farmer' && (
+                <div className="bg-green-50 rounded-xl p-6 mb-6">
+                  <h5 className="text-lg font-semibold text-green-800 mb-4">Farmer Sale Confirmation</h5>
+                  
+                  <div className="bg-green-100 rounded-lg p-4 text-center">
+                    <CheckCircle className="w-8 h-8 text-green-600 mx-auto mb-2" />
+                    <p className="text-green-800 font-semibold">Direct Liquidation</p>
+                    <p className="text-green-700 text-sm mt-1">
+                      {stockDifference} {liquidationData.unit} sold directly to farmers
+                    </p>
+                    <p className="text-green-600 text-xs mt-2">
+                      ✓ This counts toward liquidation percentage
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Retailer Details */}
+              {transactionType === 'retailer' && (
+                <div className="bg-blue-50 rounded-xl p-6 mb-6">
+                  <h5 className="text-lg font-semibold text-blue-800 mb-4">Retailer Sale Details</h5>
+                  
+                  {/* Product Information */}
+                  <div className="bg-white rounded-lg p-4 mb-4 border border-blue-200">
+                    <h6 className="font-semibold text-gray-900 mb-2">Product Information</h6>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Product Name</label>
+                        <input
+                          type="text"
+                          value={liquidationData.productName}
+                          readOnly
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-gray-700"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">SKU</label>
+                        <select className="w-full px-3 py-2 border border-blue-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                          <option value={liquidationData.skuCode}>{liquidationData.skuName}</option>
+                          <option value="DAP-50KG">DAP 50kg Bag</option>
+                          <option value="UREA-25KG">Urea 25kg Bag</option>
+                          <option value="UREA-50KG">Urea 50kg Bag</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="bg-white rounded-lg p-4 border border-blue-200">
+                    <h6 className="font-semibold text-gray-900 mb-3">Quantity Details</h6>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Assigned Quantity ({liquidationData.unit})
+                        </label>
+                        <input
+                          type="number"
+                          value={stockDifference}
+                          readOnly
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-gray-700"
+                        />
+                      </div>
+                    </div>
+                    
+                    <div className="mt-4 p-3 bg-blue-100 border border-blue-300 rounded-lg">
+                      <p className="text-blue-800 text-sm">
+                        ℹ️ Retailer-to-farmer sales will be tracked separately when checking retailer lists
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="p-6 border-t">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <button 
+                  onClick={handleModalSave}
+                  className="bg-green-600 text-white py-3 px-4 rounded-lg hover:bg-green-700 transition-colors flex items-center justify-center"
+                >
+                  <Save className="w-4 h-4 mr-2" />
+                  Save Transaction
+                </button>
+                <button 
+                  onClick={handleVerifyStock}
+                  className="bg-blue-600 text-white py-3 px-4 rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center"
+                >
+                  <Shield className="w-4 h-4 mr-2" />
+                  Save & Verify
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Remarks */}
+      {liquidationData.remarks && (
+        <div className="bg-white rounded-xl p-6 card-shadow">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">Remarks</h3>
+          <p className="text-gray-700">{liquidationData.remarks}</p>
+        </div>
+      )}
+    </div>
+    </>
+  );
+};
+
+export default RetailerLiquidation;
