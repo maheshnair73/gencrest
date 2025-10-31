@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Store, Package, Eye, MapPin, Calendar, Search, Filter, TrendingUp, TrendingDown, CheckCircle, Clock, User, X, Camera, FileText, Edit3 } from 'lucide-react';
+import { ArrowLeft, Store, Package, Eye, MapPin, Calendar, Search, Filter, TrendingUp, TrendingDown, CheckCircle, Clock, User, X, Camera, FileText, CreditCard as Edit3 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import Entity360View from '../components/Entity360View';
@@ -73,6 +73,7 @@ interface OverallMetrics {
 
 const RetailerStockVerification: React.FC = () => {
   const navigate = useNavigate();
+  const { retailerId } = useParams<{ retailerId?: string }>();
   const { user } = useAuth();
   const [retailers, setRetailers] = useState<Retailer[]>([]);
   const [selectedRetailer, setSelectedRetailer] = useState<Retailer | null>(null);
@@ -104,6 +105,41 @@ const RetailerStockVerification: React.FC = () => {
       loadVerificationHistory(selectedRetailer.retailer_id);
     }
   }, [selectedRetailer]);
+
+  useEffect(() => {
+    if (retailerId && retailers.length > 0 && !loading) {
+      console.log('[Rectify] Attempting to open modal for retailerId:', retailerId);
+      const retailer = retailers.find(r => r.retailer_id === retailerId);
+
+      if (retailer) {
+        console.log('[Rectify] Found retailer:', retailer.retailer_name);
+        console.log('[Rectify] Inventory items:', retailer.inventory.length);
+
+        if (retailer.inventory.length > 0) {
+          const firstSKU = retailer.inventory[0];
+          const unitValue = 5000;
+
+          const stockData = {
+            customer_name: retailer.retailer_name,
+            customer_code: retailer.retailer_id,
+            product_name: firstSKU.product_name,
+            sku_name: firstSKU.sku_name,
+            current_balance: firstSKU.current_stock * unitValue,
+            current_balance_units: firstSKU.current_stock,
+            unit: firstSKU.unit || 'Kg/Ltr'
+          };
+
+          console.log('[Rectify] Stock data to display:', stockData);
+          setSelectedRectifyStock(stockData);
+          setShowRectifyModal(true);
+        } else {
+          console.error('[Rectify] No inventory found for retailer');
+        }
+      } else {
+        console.error('[Rectify] Retailer not found with ID:', retailerId);
+      }
+    }
+  }, [retailerId, retailers, loading]);
 
   const fetchRetailersData = async () => {
     try {
@@ -1546,6 +1582,27 @@ const RetailerVerificationModal: React.FC<RetailerVerificationModalProps> = ({ r
         entityName={retailer.retailer_name}
         entityCode={retailer.retailer_id}
         entityType="Retailer"
+      />
+
+      {/* Stock Rectification Modal */}
+      <StockRectificationModal
+        isOpen={showRectifyModal}
+        onClose={() => {
+          setShowRectifyModal(false);
+          setSelectedRectifyStock(null);
+          if (retailerId) {
+            navigate('/retailer-stock-verification');
+          }
+        }}
+        stockData={selectedRectifyStock}
+        onSubmit={async (rectificationData) => {
+          console.log('Rectification submitted:', rectificationData);
+          setShowRectifyModal(false);
+          setSelectedRectifyStock(null);
+          if (retailerId) {
+            navigate('/retailer-stock-verification');
+          }
+        }}
       />
     </div>
   );
