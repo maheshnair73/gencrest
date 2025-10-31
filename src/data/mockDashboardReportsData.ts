@@ -103,7 +103,7 @@ export const mockRecentActivities: Activity[] = [
       amount: 150000,
       retailer: 'Agro Enterprises',
       location: 'Connaught Place, New Delhi',
-      products: 'NPK 12-32-16 (20 bags), Urea (15 bags)'
+      products: 'NPK 12-32-16 (1000 Kg), Urea (750 Kg)'
     }
   },
   {

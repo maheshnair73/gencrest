@@ -123,7 +123,7 @@ const ZBHDashboard: React.FC = () => {
       type: 'Stock Transfer',
       submittedBy: 'Suresh Iyer',
       role: 'TSM',
-      description: 'Stock transfer request - 500 bags DAP',
+      description: 'Stock transfer request - 25000 Kg DAP',
       submittedDate: '2025-10-14',
       urgency: 'high'
     },

@@ -155,7 +155,7 @@ const Approvals: React.FC = () => {
         retailer: 'Agro Enterprises',
         location: 'Connaught Place, New Delhi',
         liquidationId: 'LIQ-2024-001',
-        products: 'NPK 12-32-16 (20 bags), Urea (15 bags)',
+        products: 'NPK 12-32-16 (1000 Kg), Urea (750 Kg)',
         amount: 150000,
         reason: 'Liquidation completed - Awaiting verification',
         verifiedBy: 'Rajesh Kumar (TSM)'
@@ -189,7 +189,7 @@ const Approvals: React.FC = () => {
         retailer: 'Green Valley Traders',
         location: 'Rohini, New Delhi',
         liquidationId: 'LIQ-2024-002',
-        products: 'DAP (30 bags), MOP (25 bags)',
+        products: 'DAP (1500 Kg), MOP (1250 Kg)',
         amount: 220000,
         reason: 'Stock verification and adjustment required',
         verifiedBy: 'Kavita Verma (TSM)'

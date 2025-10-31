@@ -515,7 +515,7 @@ export const MOCK_VISITS: MockVisit[] = [
     checkOutTime: '11:45 AM',
     duration: 75,
     purpose: 'Stock verification and order discussion',
-    notes: 'Verified stock levels. Discussed new product launch. Received order for 500 bags.',
+    notes: 'Verified stock levels. Discussed new product launch. Received order for 25000 Kg.',
     status: 'completed'
   },
   {

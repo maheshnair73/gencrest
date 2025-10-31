@@ -201,7 +201,7 @@ export const liquidationApiService = {
       // The API response is { data: [...], pagination: {...} }
       return { success: true, data: data };
     } catch (error: any) {
-      console.error('Error fetching paginated distributors:', error);
+      console.log('[API] Backend unavailable, will fallback to Supabase');
       return { success: false, error: { message: error.message } };
     }
   },
