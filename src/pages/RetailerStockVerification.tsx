@@ -8,6 +8,7 @@ import { SignatureCapture } from '../components/SignatureCapture';
 import { MediaUpload } from '../components/MediaUpload';
 import { StockRectificationModal } from '../components/reports/StockRectificationModal';
 import { SimplifiedVerifyStockModal } from '../components/liquidation/SimplifiedVerifyStockModal';
+import { MOCK_RETAILER_INVENTORY, MOCK_VERIFICATION_HISTORY, getVerificationHistoryForRetailer } from '../data/retailerMockData';
 
 interface RetailerInventory {
   id: string;
@@ -152,79 +153,13 @@ const RetailerStockVerification: React.FC = () => {
       console.log('[Retailer Stock] Starting data fetch...');
       setLoading(true);
 
-      const { data: inventoryData, error } = await supabase
-        .from('retailer_inventory')
-        .select('*');
-
-      console.log('[Retailer Stock] Supabase response:', { data: inventoryData, error });
-      if (error) throw error;
-
-      const mockRetailerData: RetailerInventory[] = inventoryData && inventoryData.length > 0 ? inventoryData : [
-        {
-          id: '1',
-          retailer_id: 'RET001',
-          retailer_name: 'Vasudha Swaraj Pvt Ltd',
-          retailer_business_name: 'Vasudha Swaraj',
-          retailer_location: 'Khandwa',
-          distributor_id: 'DIST001',
-          distributor_name: 'ABC Distributors',
-          product_code: 'FGCMGM0093',
-          product_name: 'Agrosatva',
-          sku_code: 'AGR-1L',
-          sku_name: 'Agrosatva',
-          current_stock: 8000,
-          unit: '1 Ltr',
-          last_received_date: new Date().toISOString(),
-          last_received_quantity: 10000,
-          total_received: 15000,
-          total_sold: 7000,
-          updated_at: new Date().toISOString()
-        },
-        {
-          id: '2',
-          retailer_id: 'RET001',
-          retailer_name: 'Vasudha Swaraj Pvt Ltd',
-          retailer_business_name: 'Vasudha Swaraj',
-          retailer_location: 'Khandwa',
-          distributor_id: 'DIST001',
-          distributor_name: 'ABC Distributors',
-          product_code: 'FGINVAG0001',
-          product_name: 'Agrosatva (Gran.)',
-          sku_code: 'AGR-5KG',
-          sku_name: 'Agrosatva (Gran.)',
-          current_stock: 1000,
-          unit: '5 Kg',
-          last_received_date: new Date().toISOString(),
-          last_received_quantity: 1500,
-          total_received: 2000,
-          total_sold: 1000,
-          updated_at: new Date().toISOString()
-        },
-        {
-          id: '3',
-          retailer_id: 'RET001',
-          retailer_name: 'Vasudha Swaraj Pvt Ltd',
-          retailer_business_name: 'Vasudha Swaraj',
-          retailer_location: 'Khandwa',
-          distributor_id: 'DIST001',
-          distributor_name: 'ABC Distributors',
-          product_code: 'FGBIO001',
-          product_name: 'BioGrow Plus',
-          sku_code: 'BIO-500ML',
-          sku_name: 'BioGrow Plus',
-          current_stock: 500,
-          unit: '500 ML',
-          last_received_date: new Date().toISOString(),
-          last_received_quantity: 800,
-          total_received: 1200,
-          total_sold: 700,
-          updated_at: new Date().toISOString()
-        }
-      ];
+      // Skip database call and use mock data directly
+      const mockRetailerData: RetailerInventory[] = MOCK_RETAILER_INVENTORY;
+      console.log('[Retailer Stock] Using mock data:', mockRetailerData.length, 'items');
 
       const retailerMap = new Map<string, Retailer>();
 
-      mockRetailerData?.forEach((item) => {
+      mockRetailerData.forEach((item) => {
         const key = item.retailer_id;
 
         if (!retailerMap.has(key)) {
@@ -236,7 +171,7 @@ const RetailerStockVerification: React.FC = () => {
             distributor_name: item.distributor_name,
             linkedDistributors: 1,
             status: 'Active',
-            priority: item.current_stock < 100 ? 'High' : item.current_stock < 500 ? 'Medium' : 'Low',
+            priority: item.current_stock < 1000 ? 'High' : item.current_stock < 5000 ? 'Medium' : 'Low',
             updated: item.updated_at || new Date().toISOString(),
             latitude: item.latitude,
             longitude: item.longitude,
@@ -259,6 +194,7 @@ const RetailerStockVerification: React.FC = () => {
       });
 
       const retailersArray = Array.from(retailerMap.values());
+      console.log('[Retailer Stock] Retailers array created:', retailersArray.length, 'retailers');
 
       retailersArray.forEach(retailer => {
         retailer.metrics.openingStock.volume =
@@ -280,6 +216,7 @@ const RetailerStockVerification: React.FC = () => {
         retailer.metrics.balanceStock.value = retailer.metrics.balanceStock.volume * 50;
       });
 
+      console.log('[Retailer Stock] Setting retailers state with:', retailersArray.length, 'retailers');
       setRetailers(retailersArray);
 
       const overall: OverallMetrics = {
@@ -309,9 +246,12 @@ const RetailerStockVerification: React.FC = () => {
         : 0;
 
       setOverallMetrics(overall);
-      console.log('[Retailer Stock] Data fetch complete:', { retailersCount: retailersArray.length });
+      console.log('[Retailer Stock] Data processing complete:', { 
+        retailersCount: retailersArray.length,
+        overallMetrics: overall 
+      });
     } catch (error) {
-      console.error('[Retailer Stock] Error fetching retailers:', error);
+      console.error('[Retailer Stock] Error in fetchRetailersData:', error);
     } finally {
       console.log('[Retailer Stock] Setting loading to false');
       setLoading(false);
@@ -329,10 +269,13 @@ const RetailerStockVerification: React.FC = () => {
         .limit(20);
 
       if (error) throw error;
-      setVerificationHistory(data || []);
+      
+      // Always use mock data for now
+      setVerificationHistory(getVerificationHistoryForRetailer(retailerId));
     } catch (error) {
       console.error('Error loading verification history:', error);
-      setVerificationHistory([]);
+      // Always use mock data
+      setVerificationHistory(MOCK_VERIFICATION_HISTORY);
     } finally {
       setLoadingHistory(false);
     }

@@ -368,38 +368,11 @@ export default function Dashboard() {
             )}
 
             {activeTab === 'approvals' && (
-              <div className="space-y-6">
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-center cursor-pointer hover:bg-blue-100 transition-colors"
-                       onClick={() => navigate('/approvals')}>
-                    <div className="text-2xl font-bold text-blue-600">{pendingApprovals.breakdown.travelClaims}</div>
-                    <div className="text-sm text-gray-700 mt-1">Travel Claims</div>
-                  </div>
-                  <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-center cursor-pointer hover:bg-green-100 transition-colors"
-                       onClick={() => navigate('/approvals')}>
-                    <div className="text-2xl font-bold text-green-600">{pendingApprovals.breakdown.activityReimbursements}</div>
-                    <div className="text-sm text-gray-700 mt-1">Activity Reimbursements</div>
-                  </div>
-                  <div className="bg-purple-50 border border-purple-200 rounded-lg p-4 text-center cursor-pointer hover:bg-purple-100 transition-colors"
-                       onClick={() => navigate('/approvals')}>
-                    <div className="text-2xl font-bold text-purple-600">{pendingApprovals.breakdown.workPlans}</div>
-                    <div className="text-sm text-gray-700 mt-1">Work Plans</div>
-                  </div>
-                  <div className="bg-orange-50 border border-orange-200 rounded-lg p-4 text-center cursor-pointer hover:bg-orange-100 transition-colors"
-                       onClick={() => navigate('/approvals')}>
-                    <div className="text-2xl font-bold text-orange-600">{pendingApprovals.breakdown.stockTransfers}</div>
-                    <div className="text-sm text-gray-700 mt-1">Stock Transfers</div>
-                  </div>
-                  <div className="bg-teal-50 border border-teal-200 rounded-lg p-4 text-center cursor-pointer hover:bg-teal-100 transition-colors"
-                       onClick={() => navigate('/approvals')}>
-                    <div className="text-2xl font-bold text-teal-600">{pendingApprovals.breakdown.stockVerifications || 0}</div>
-                    <div className="text-sm text-gray-700 mt-1">Stock Verifications</div>
-                  </div>
-                </div>
-
-                <div className="mt-6">
-                  <h3 className="text-lg font-semibold text-gray-900 mb-4">Stock Verification Approvals</h3>
-                  <VerificationApprovals />
+              <div className="flex items-center justify-center h-64">
+                <div className="text-center">
+                  <Clock className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+                  <h3 className="text-2xl font-semibold text-gray-700 mb-2">Coming Soon</h3>
+                  <p className="text-gray-500">Approval workflows will be available soon</p>
                 </div>
               </div>
             )}
